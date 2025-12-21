@@ -187,7 +187,7 @@ function EmptyState({ icon: Icon, title, description, action, actionLabel }: { i
 // ============================================
 // OVERVIEW TAB
 // ============================================
-function OverviewTab({ data, onUpload }: { data: { income: number; expenses: number; profit: number }; onUpload: () => void }) {
+function OverviewTab({ data, transactions, onUpload }: { data: { income: number; expenses: number; profit: number }; transactions: Transaction[]; onUpload: () => void }) {
   const margin = data.income > 0 ? ((data.profit / data.income) * 100).toFixed(1) : '0'
   const hasData = data.income > 0 || data.expenses > 0
 
@@ -205,27 +205,106 @@ function OverviewTab({ data, onUpload }: { data: { income: number; expenses: num
     )
   }
 
+  // Group transactions by category for breakdown
+  const expensesByCategory = transactions
+    .filter(t => t.type === 'expense')
+    .reduce((acc, t) => {
+      const cat = t.category || 'Other'
+      acc[cat] = (acc[cat] || 0) + Math.abs(t.amount)
+      return acc
+    }, {} as Record<string, number>)
+
+  const incomeByBank = transactions
+    .filter(t => t.type === 'income')
+    .reduce((acc, t) => {
+      const bank = t.bank || 'Other'
+      acc[bank] = (acc[bank] || 0) + t.amount
+      return acc
+    }, {} as Record<string, number>)
+
   return (
     <div className="space-y-6">
+      {/* Main Metrics */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="col-span-2 bg-gradient-to-br from-emerald-500/20 to-emerald-600/5 border border-emerald-500/30 rounded-2xl p-6">
           <p className="text-emerald-400/80 text-sm font-medium mb-1">Total Profit</p>
           <p className="text-4xl font-bold">{formatCurrency(data.profit)}</p>
-          <p className="text-emerald-400 text-sm mt-2">+{margin}% margin</p>
+          <p className="text-emerald-400 text-sm mt-2">{margin}% margin</p>
         </div>
         <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl p-5">
           <p className="text-zinc-400 text-sm mb-2">Income</p>
-          <p className="text-2xl font-bold">{formatCurrency(data.income)}</p>
+          <p className="text-2xl font-bold text-emerald-400">{formatCurrency(data.income)}</p>
+          <p className="text-zinc-500 text-xs mt-1">{transactions.filter(t => t.type === 'income').length} transactions</p>
         </div>
         <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl p-5">
           <p className="text-zinc-400 text-sm mb-2">Expenses</p>
-          <p className="text-2xl font-bold">{formatCurrency(data.expenses)}</p>
+          <p className="text-2xl font-bold text-red-400">{formatCurrency(data.expenses)}</p>
+          <p className="text-zinc-500 text-xs mt-1">{transactions.filter(t => t.type === 'expense').length} transactions</p>
         </div>
       </div>
+
+      {/* Breakdown Cards */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Income by Bank */}
+        <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl p-6">
+          <h3 className="font-semibold mb-4">Income by Source</h3>
+          <div className="space-y-3">
+            {Object.entries(incomeByBank)
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 5)
+              .map(([bank, amount]) => (
+                <div key={bank} className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-2 h-2 rounded-full bg-emerald-500" />
+                    <span className="text-zinc-300">{bank}</span>
+                  </div>
+                  <span className="font-semibold text-emerald-400">{formatCurrency(amount)}</span>
+                </div>
+              ))}
+            {Object.keys(incomeByBank).length === 0 && (
+              <p className="text-zinc-500 text-sm">No income data</p>
+            )}
+          </div>
+        </div>
+
+        {/* Expenses by Category */}
+        <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl p-6">
+          <h3 className="font-semibold mb-4">Expenses by Category</h3>
+          <div className="space-y-3">
+            {Object.entries(expensesByCategory)
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 5)
+              .map(([category, amount]) => (
+                <div key={category} className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-2 h-2 rounded-full bg-red-500" />
+                    <span className="text-zinc-300">{category}</span>
+                  </div>
+                  <span className="font-semibold text-red-400">{formatCurrency(amount)}</span>
+                </div>
+              ))}
+            {Object.keys(expensesByCategory).length === 0 && (
+              <p className="text-zinc-500 text-sm">No expense data</p>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Recent Transactions */}
       <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl p-6">
-        <h3 className="font-semibold mb-4">Financial Trend</h3>
-        <div className="h-64 flex items-center justify-center text-zinc-500">
-          Chart will be rendered here with Recharts
+        <h3 className="font-semibold mb-4">Recent Transactions</h3>
+        <div className="space-y-2">
+          {transactions.slice(0, 5).map((tx) => (
+            <div key={tx.id} className="flex items-center justify-between py-2 border-b border-zinc-800 last:border-0">
+              <div>
+                <p className="font-medium">{tx.description}</p>
+                <p className="text-zinc-500 text-xs">{tx.bank} • {tx.date}</p>
+              </div>
+              <span className={`font-semibold ${tx.type === 'income' ? 'text-emerald-400' : 'text-red-400'}`}>
+                {tx.type === 'income' ? '+' : '-'}{formatCurrency(Math.abs(tx.amount), tx.currency)}
+              </span>
+            </div>
+          ))}
         </div>
       </div>
     </div>
@@ -488,18 +567,34 @@ function EditVariableModal({ member, month, currentValue, currentNote, onSave, o
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<'overview' | 'transactions' | 'payroll'>('overview')
   const [selectedYear, setSelectedYear] = useState(currentYear)
-  const [selectedMonths, setSelectedMonths] = useState<number[]>([])
+  const [selectedMonths, setSelectedMonths] = useState<number[]>([currentMonthIndex])
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [showUploadModal, setShowUploadModal] = useState(false)
   const [showAddMemberModal, setShowAddMemberModal] = useState(false)
 
-  // Format current month string
-  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-  const currentMonthStr = `${monthNames[currentMonthIndex]} ${currentYear}`
+  // Month names
+  const monthNamesShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const currentMonthStr = `${monthNamesShort[currentMonthIndex]} ${currentYear}`
 
-  // Calculate aggregated data from transactions
-  const aggregatedData = transactions.reduce((acc, t) => {
+  // Filter transactions by selected period
+  const filteredTransactions = transactions.filter(tx => {
+    if (!tx.period) return true
+    
+    if (selectedMonths.length === 0) {
+      // All year - show all from selected year
+      return tx.period.includes(String(selectedYear))
+    }
+    
+    // Filter by selected months
+    return selectedMonths.some(monthIdx => {
+      const periodStr = `${monthNamesShort[monthIdx]} ${selectedYear}`
+      return tx.period === periodStr
+    })
+  })
+
+  // Calculate aggregated data from FILTERED transactions
+  const aggregatedData = filteredTransactions.reduce((acc, t) => {
     if (t.type === 'income') {
       return { ...acc, income: acc.income + t.amount }
     } else if (t.type === 'expense') {
@@ -515,8 +610,17 @@ export default function Dashboard() {
     return `${selectedMonths.length} Months Selected`
   }
 
+  // Payroll month based on selection
+  const getPayrollMonth = () => {
+    if (selectedMonths.length === 1) {
+      return `${monthNamesShort[selectedMonths[0]]} ${selectedYear}`
+    }
+    return currentMonthStr
+  }
+
   const handleUpdateVariable = (id: string, variable: number, note: string) => {
-    setTeamMembers(prev => prev.map(m => m.id !== id ? m : { ...m, compensation: { ...m.compensation, [currentMonthStr]: { variable, note } } }))
+    const month = getPayrollMonth()
+    setTeamMembers(prev => prev.map(m => m.id !== id ? m : { ...m, compensation: { ...m.compensation, [month]: { variable, note } } }))
   }
 
   const handleAddMember = (name: string, role: string, baseSalary: number) => {
@@ -558,7 +662,15 @@ export default function Dashboard() {
         </header>
         <main className="max-w-7xl mx-auto px-6 py-6">
           <div className="flex items-center justify-between mb-6">
-            <div><h1 className="text-2xl font-bold">{getPeriodLabel()}</h1><p className="text-zinc-500 mt-1">Financial summary</p></div>
+            <div>
+              <h1 className="text-2xl font-bold">{getPeriodLabel()}</h1>
+              <p className="text-zinc-500 mt-1">
+                {filteredTransactions.length > 0 
+                  ? `${filteredTransactions.length} transactions • ${formatCurrency(aggregatedData.profit)} profit`
+                  : 'No data for this period'
+                }
+              </p>
+            </div>
             <div className="flex items-center bg-zinc-800 rounded-xl p-1">
               {tabs.map((tab) => (
                 <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === tab.id ? 'bg-emerald-500 text-black' : 'text-zinc-400 hover:text-white'}`}>
@@ -567,9 +679,9 @@ export default function Dashboard() {
               ))}
             </div>
           </div>
-          {activeTab === 'overview' && <OverviewTab data={aggregatedData} onUpload={() => setShowUploadModal(true)} />}
-          {activeTab === 'transactions' && <TransactionsTab transactions={transactions} onUpload={() => setShowUploadModal(true)} />}
-          {activeTab === 'payroll' && <PayrollTab teamMembers={teamMembers} currentMonth={currentMonthStr} onUpdateVariable={handleUpdateVariable} onAddMember={() => setShowAddMemberModal(true)} />}
+          {activeTab === 'overview' && <OverviewTab data={aggregatedData} transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} />}
+          {activeTab === 'transactions' && <TransactionsTab transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} />}
+          {activeTab === 'payroll' && <PayrollTab teamMembers={teamMembers} currentMonth={getPayrollMonth()} onUpdateVariable={handleUpdateVariable} onAddMember={() => setShowAddMemberModal(true)} />}
         </main>
       </div>
 
