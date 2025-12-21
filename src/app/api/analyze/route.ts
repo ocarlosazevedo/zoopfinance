@@ -5,6 +5,59 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 })
 
+// Fallback parser caso AI falhe
+function fallbackParser(csvContent: string, fileName: string): any[] {
+  const lines = csvContent.split('\n').filter(line => line.trim())
+  if (lines.length < 2) return []
+  
+  const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/"/g, ''))
+  const transactions: any[] = []
+  
+  for (let i = 1; i < lines.length; i++) {
+    const values: string[] = []
+    let current = ''
+    let inQuotes = false
+    
+    for (const char of lines[i]) {
+      if (char === '"') inQuotes = !inQuotes
+      else if (char === ',' && !inQuotes) {
+        values.push(current.trim().replace(/"/g, ''))
+        current = ''
+      } else {
+        current += char
+      }
+    }
+    values.push(current.trim().replace(/"/g, ''))
+    
+    if (values.length < 2) continue
+
+    // Try to find date, description, amount columns
+    const dateIdx = headers.findIndex(h => h.includes('date') || h.includes('completed'))
+    const descIdx = headers.findIndex(h => h.includes('description') || h.includes('memo') || h.includes('name'))
+    const amountIdx = headers.findIndex(h => h.includes('amount') || h.includes('value') || h.includes('sum'))
+    const currencyIdx = headers.findIndex(h => h.includes('currency'))
+
+    const amount = parseFloat((values[amountIdx >= 0 ? amountIdx : 2] || '0').replace(/[^0-9.-]/g, '')) || 0
+    if (amount === 0) continue
+
+    const isRelay = fileName.toLowerCase().includes('relay')
+    const isRevolut = fileName.toLowerCase().includes('revolut') || headers.includes('type')
+
+    transactions.push({
+      date: values[dateIdx >= 0 ? dateIdx : 0]?.split(' ')[0] || new Date().toISOString().split('T')[0],
+      description: values[descIdx >= 0 ? descIdx : 1] || 'Transaction',
+      amount,
+      currency: values[currencyIdx] || 'USD',
+      type: amount > 0 ? 'income' : 'expense',
+      category: 'Uncategorized',
+      bank: isRelay ? 'Relay' : isRevolut ? 'Revolut' : 'Imported',
+      originalDescription: values[descIdx >= 0 ? descIdx : 1] || ''
+    })
+  }
+
+  return transactions
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { csvContent, fileName, period } = await request.json()
@@ -13,120 +66,117 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No CSV content provided' }, { status: 400 })
     }
 
-    const systemPrompt = `You are a financial data processor. Parse bank statement CSVs and output ONLY a JSON array.
+    // Limit CSV size to prevent timeout
+    const maxLines = 500
+    const lines = csvContent.split('\n')
+    const truncatedCSV = lines.slice(0, maxLines + 1).join('\n')
+    const wasTruncated = lines.length > maxLines + 1
 
-CATEGORIES:
-- Sales: Shopify, Stripe, PayPal payouts, e-commerce revenue
-- Ads: Facebook Ads, Google Ads, TikTok Ads, Meta
-- Software: SaaS, subscriptions, tools
-- Payroll: Salaries, contractor payments
-- Shipping: Logistics, fulfillment, delivery
-- Fees: Bank fees, processing fees
-- Transfer: Internal transfers between own accounts
-- Refunds: Customer refunds, chargebacks
-- Other: Everything else
+    let transactions: any[] = []
+    let usedAI = true
 
-RULES:
-- Positive amounts = income
-- Negative amounts = expense
-- Transfers between own accounts = type "internal"
-- Clean ALL CAPS to Title Case
-- Output ONLY the JSON array, nothing else
-- No markdown, no explanations, no text before or after
-
-OUTPUT FORMAT - JSON array only:
-[{"date":"YYYY-MM-DD","description":"Clean name","amount":123.45,"currency":"USD","type":"income","category":"Sales","bank":"Revolut","originalDescription":"RAW DESC"}]`
-
-    const userPrompt = `Parse this CSV and return ONLY a JSON array of transactions:
-
-${csvContent}
-
-Remember: Output ONLY the JSON array, no other text.`
-
-    const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 16000,
-      messages: [
-        {
-          role: 'user',
-          content: userPrompt
-        }
-      ],
-      system: systemPrompt
-    })
-
-    // Extract text content
-    const textContent = message.content.find(block => block.type === 'text')
-    if (!textContent || textContent.type !== 'text') {
-      throw new Error('No text response from Claude')
-    }
-
-    // Parse JSON response
-    let transactions
     try {
-      // Clean up response - remove markdown and extra text
+      const systemPrompt = `You are a JSON generator. Parse CSV bank statements and output ONLY a valid JSON array.
+
+IMPORTANT: Your response must start with [ and end with ] - nothing else.
+
+For each transaction, output:
+{"date":"YYYY-MM-DD","description":"Clean Name","amount":NUMBER,"currency":"USD","type":"income|expense|internal","category":"CATEGORY","bank":"BANK"}
+
+Categories: Sales, Ads, Software, Payroll, Shipping, Fees, Transfer, Refunds, Other
+
+Rules:
+- Positive = income, Negative = expense
+- Internal transfers between own accounts = "internal"
+- Clean descriptions (no ALL CAPS)
+- Detect bank from data (Relay, Revolut, Mercury, etc)
+
+OUTPUT ONLY THE JSON ARRAY. NO TEXT BEFORE OR AFTER.`
+
+      const message = await anthropic.messages.create({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 16000,
+        messages: [{ role: 'user', content: `Parse this CSV to JSON array:\n\n${truncatedCSV}` }],
+        system: systemPrompt
+      })
+
+      const textContent = message.content.find(block => block.type === 'text')
+      if (!textContent || textContent.type !== 'text') {
+        throw new Error('No response')
+      }
+
       let jsonStr = textContent.text.trim()
       
-      // Find JSON array in response
-      const jsonStart = jsonStr.indexOf('[')
-      const jsonEnd = jsonStr.lastIndexOf(']')
+      // Extract JSON array from response
+      const firstBracket = jsonStr.indexOf('[')
+      const lastBracket = jsonStr.lastIndexOf(']')
       
-      if (jsonStart === -1 || jsonEnd === -1) {
-        console.error('No JSON array found in response:', jsonStr.substring(0, 500))
-        throw new Error('No valid JSON array in response')
+      if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
+        jsonStr = jsonStr.substring(firstBracket, lastBracket + 1)
+        
+        // Try to fix common JSON issues
+        jsonStr = jsonStr
+          .replace(/,\s*]/g, ']') // Remove trailing commas
+          .replace(/,\s*,/g, ',') // Remove double commas
+        
+        transactions = JSON.parse(jsonStr)
+        
+        if (!Array.isArray(transactions)) {
+          throw new Error('Not an array')
+        }
+      } else {
+        throw new Error('No JSON array found')
       }
-      
-      jsonStr = jsonStr.substring(jsonStart, jsonEnd + 1)
-      
-      transactions = JSON.parse(jsonStr)
-      
-      if (!Array.isArray(transactions)) {
-        throw new Error('Response is not an array')
-      }
-    } catch (parseError) {
-      console.error('Failed to parse Claude response:', textContent.text.substring(0, 1000))
-      throw new Error('Failed to parse AI response as JSON')
+    } catch (aiError) {
+      console.error('AI parsing failed, using fallback:', aiError)
+      transactions = fallbackParser(csvContent, fileName)
+      usedAI = false
     }
 
-    // Validate and add IDs
+    // Process and validate transactions
     const processedTransactions = transactions
       .filter((tx: any) => {
-        // Filter out invalid transactions
         const amount = typeof tx.amount === 'number' ? tx.amount : parseFloat(tx.amount)
         return !isNaN(amount) && amount !== 0
       })
       .map((tx: any, index: number) => {
         const amount = typeof tx.amount === 'number' ? tx.amount : parseFloat(tx.amount) || 0
         return {
-          id: `${Date.now()}-${index}`,
+          id: `${Date.now()}-${index}-${Math.random().toString(36).substr(2, 9)}`,
           date: tx.date || new Date().toISOString().split('T')[0],
-          description: tx.description || tx.originalDescription || 'Unknown',
-          amount: amount,
+          description: (tx.description || tx.originalDescription || 'Transaction').substring(0, 100),
+          amount,
           currency: tx.currency || 'USD',
           type: tx.type || (amount > 0 ? 'income' : 'expense'),
           category: tx.category || 'Other',
           bank: tx.bank || 'Imported',
           account: tx.currency || 'Main',
-          reference: tx.originalDescription || '',
-          period: period
+          reference: (tx.originalDescription || '').substring(0, 200),
+          period
         }
       })
+
+    if (processedTransactions.length === 0) {
+      return NextResponse.json({ 
+        error: 'No valid transactions found. Please check your CSV format.' 
+      }, { status: 400 })
+    }
 
     return NextResponse.json({ 
       success: true, 
       transactions: processedTransactions,
-      summary: {
+      meta: {
         total: processedTransactions.length,
-        income: processedTransactions.filter((t: any) => t.type === 'income').length,
-        expenses: processedTransactions.filter((t: any) => t.type === 'expense').length,
-        internal: processedTransactions.filter((t: any) => t.type === 'internal').length
+        usedAI,
+        truncated: wasTruncated,
+        originalLines: lines.length - 1
       }
     })
 
   } catch (error: any) {
     console.error('Analysis error:', error)
     return NextResponse.json({ 
-      error: error.message || 'Failed to analyze statement' 
+      error: 'Failed to process statement. Please try again.' 
     }, { status: 500 })
   }
 }
