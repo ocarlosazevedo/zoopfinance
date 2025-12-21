@@ -26,6 +26,7 @@ type Transaction = {
   category: string
   amount: number
   currency: string
+  period?: string
 }
 
 // ============================================
@@ -574,7 +575,12 @@ export default function Dashboard() {
 
       {/* Upload Modal */}
       {showUploadModal && (
-        <UploadModal onClose={() => setShowUploadModal(false)} onUploadComplete={(txs) => { setTransactions(prev => [...prev, ...txs]); setShowUploadModal(false) }} />
+        <UploadModal onClose={() => setShowUploadModal(false)} onUploadComplete={(txs, period) => { 
+          // Add period to each transaction
+          const txsWithPeriod = txs.map(tx => ({ ...tx, period }))
+          setTransactions(prev => [...prev, ...txsWithPeriod])
+          setShowUploadModal(false) 
+        }} />
       )}
 
       {/* Add Member Modal */}
@@ -588,15 +594,19 @@ export default function Dashboard() {
 // ============================================
 // UPLOAD MODAL
 // ============================================
-function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUploadComplete: (transactions: Transaction[]) => void }) {
+function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUploadComplete: (transactions: Transaction[], period: string) => void }) {
   const [isDragging, setIsDragging] = useState(false)
   const [files, setFiles] = useState<File[]>([])
   const [parsing, setParsing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState<string>('')
   const fileInputRef = useRef<HTMLInputElement>(null)
+  
+  // Period selection
+  const [selectedMonth, setSelectedMonth] = useState(currentMonthIndex)
+  const [selectedYear, setSelectedYear] = useState(currentYear)
 
-  const acceptedTypes = ['.csv', '.zip', 'text/csv', 'application/zip', 'application/x-zip-compressed']
+  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault()
@@ -611,14 +621,12 @@ function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUpl
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(false)
-    const droppedFiles = Array.from(e.dataTransfer.files).filter(f => 
-      f.name.endsWith('.csv') || f.name.endsWith('.zip')
-    )
+    const droppedFiles = Array.from(e.dataTransfer.files).filter(f => f.name.endsWith('.csv'))
     if (droppedFiles.length > 0) {
       setFiles(prev => [...prev, ...droppedFiles])
       setError(null)
     } else {
-      setError('Please upload CSV or ZIP files')
+      setError('Please upload CSV files')
     }
   }
 
@@ -744,26 +752,14 @@ function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUpl
     setError(null)
     
     const allTransactions: Transaction[] = []
+    const period = `${monthNames[selectedMonth].slice(0, 3)} ${selectedYear}`
 
     try {
       for (let i = 0; i < files.length; i++) {
         const file = files[i]
         setProgress(`Processing ${i + 1}/${files.length}: ${file.name}`)
 
-        if (file.name.endsWith('.zip')) {
-          // Process ZIP file
-          const JSZip = (await import('jszip')).default
-          const zip = await JSZip.loadAsync(file)
-          
-          const csvFiles = Object.keys(zip.files).filter(name => name.endsWith('.csv'))
-          
-          for (const csvName of csvFiles) {
-            const csvContent = await zip.files[csvName].async('string')
-            const txs = parseCSVContent(csvContent, csvName)
-            allTransactions.push(...txs)
-          }
-        } else if (file.name.endsWith('.csv')) {
-          // Process CSV file
+        if (file.name.endsWith('.csv')) {
           const text = await file.text()
           const txs = parseCSVContent(text, file.name)
           allTransactions.push(...txs)
@@ -777,9 +773,9 @@ function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUpl
         return
       }
 
-      setProgress(`Imported ${allTransactions.length} transactions!`)
+      setProgress(`Imported ${allTransactions.length} transactions for ${period}!`)
       setTimeout(() => {
-        onUploadComplete(allTransactions)
+        onUploadComplete(allTransactions, period)
       }, 500)
     } catch (err) {
       console.error(err)
@@ -797,7 +793,33 @@ function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUpl
           <button onClick={onClose} className="p-2 hover:bg-zinc-800 rounded-lg"><X className="w-5 h-5 text-zinc-400" /></button>
         </div>
         
-        <div className="p-5">
+        <div className="p-5 space-y-4">
+          {/* Period Selector */}
+          <div>
+            <label className="block text-zinc-400 text-sm mb-2">Statement Period</label>
+            <div className="flex gap-2">
+              <select
+                value={selectedMonth}
+                onChange={(e) => setSelectedMonth(parseInt(e.target.value))}
+                className="flex-1 bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 focus:outline-none focus:border-emerald-500 cursor-pointer"
+              >
+                {monthNames.map((month, idx) => (
+                  <option key={month} value={idx}>{month}</option>
+                ))}
+              </select>
+              <select
+                value={selectedYear}
+                onChange={(e) => setSelectedYear(parseInt(e.target.value))}
+                className="w-24 bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 focus:outline-none focus:border-emerald-500 cursor-pointer"
+              >
+                {[2023, 2024, 2025, 2026].map((year) => (
+                  <option key={year} value={year}>{year}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Drop Zone */}
           <div
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
@@ -810,14 +832,14 @@ function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUpl
             <input
               ref={fileInputRef}
               type="file"
-              accept=".csv,.zip"
+              accept=".csv"
               multiple
               onChange={handleFileSelect}
               className="hidden"
             />
             <FileUp className={`w-10 h-10 mx-auto mb-3 ${isDragging ? 'text-emerald-400' : 'text-zinc-500'}`} />
             <p className="text-zinc-400 mb-1">Drag & drop your bank statements</p>
-            <p className="text-zinc-600 text-sm mb-3">CSV or ZIP files • Multiple files supported</p>
+            <p className="text-zinc-600 text-sm mb-3">CSV files • Multiple files supported</p>
             <button 
               type="button"
               className="bg-zinc-800 hover:bg-zinc-700 text-white font-medium px-4 py-2 rounded-lg transition-colors"
@@ -826,8 +848,9 @@ function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUpl
             </button>
           </div>
 
+          {/* File List */}
           {files.length > 0 && (
-            <div className="mt-4 space-y-2 max-h-48 overflow-y-auto">
+            <div className="space-y-2 max-h-40 overflow-y-auto">
               {files.map((file, index) => (
                 <div key={index} className="flex items-center gap-3 p-3 bg-zinc-800 rounded-xl">
                   <div className="w-8 h-8 rounded-lg bg-emerald-500/20 flex items-center justify-center flex-shrink-0">
@@ -845,23 +868,26 @@ function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUpl
             </div>
           )}
 
+          {/* Error */}
           {error && (
-            <div className="mt-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+            <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
               {error}
             </div>
           )}
 
+          {/* Progress */}
           {progress && !error && (
-            <div className="mt-4 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg text-emerald-400 text-sm">
+            <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg text-emerald-400 text-sm">
               {progress}
             </div>
           )}
 
+          {/* Import Button */}
           {files.length > 0 && (
             <button
               onClick={processFiles}
               disabled={parsing}
-              className="w-full mt-4 py-3 bg-emerald-500 hover:bg-emerald-400 disabled:bg-zinc-700 text-black font-semibold rounded-xl transition-colors flex items-center justify-center gap-2"
+              className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 disabled:bg-zinc-700 text-black font-semibold rounded-xl transition-colors flex items-center justify-center gap-2"
             >
               {parsing ? (
                 <>
@@ -869,7 +895,7 @@ function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUpl
                   Processing...
                 </>
               ) : (
-                `Import ${files.length} file${files.length > 1 ? 's' : ''}`
+                `Import to ${monthNames[selectedMonth].slice(0, 3)} ${selectedYear}`
               )}
             </button>
           )}
