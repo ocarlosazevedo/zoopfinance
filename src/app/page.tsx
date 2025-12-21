@@ -704,15 +704,177 @@ export default function Dashboard() {
 }
 
 // ============================================
-// UPLOAD MODAL
+// LOCAL CSV PARSER - INSTANTÂNEO
+// ============================================
+const categoryRules: { pattern: RegExp; category: string }[] = [
+  // Sales / Revenue
+  { pattern: /shopify|stripe payout|paypal payout|amazon payout|etsy|ebay deposit/i, category: 'Sales' },
+  // Advertising
+  { pattern: /facebook|meta ads|google ads|tiktok|snapchat|pinterest ads|advertising/i, category: 'Ads' },
+  // Software / SaaS
+  { pattern: /notion|slack|zoom|github|vercel|aws|google cloud|heroku|digitalocean|openai|anthropic|zapier|airtable|figma|canva|adobe|microsoft|dropbox|1password/i, category: 'Software' },
+  // Payroll
+  { pattern: /payroll|salary|gusto|deel|remote\.com|wise transfer|contractor/i, category: 'Payroll' },
+  // Shipping / Logistics
+  { pattern: /fedex|ups|usps|dhl|shipstation|shippo|easypost|fulfillment|shipping|postage/i, category: 'Shipping' },
+  // Fees
+  { pattern: /fee|charge|interest|penalty|overdraft|wire fee|monthly service/i, category: 'Fees' },
+  // Transfers
+  { pattern: /transfer|ach|wire|internal|between accounts/i, category: 'Transfer' },
+  // Refunds
+  { pattern: /refund|chargeback|dispute|reversal|return/i, category: 'Refunds' },
+]
+
+function detectCategory(description: string): string {
+  const desc = description.toLowerCase()
+  for (const rule of categoryRules) {
+    if (rule.pattern.test(desc)) {
+      return rule.category
+    }
+  }
+  return 'Other'
+}
+
+function cleanDescription(desc: string): string {
+  if (!desc) return 'Transaction'
+  // Remove ALL CAPS, clean up
+  let cleaned = desc.trim()
+  if (cleaned === cleaned.toUpperCase() && cleaned.length > 3) {
+    cleaned = cleaned.toLowerCase().replace(/\b\w/g, c => c.toUpperCase())
+  }
+  // Remove common prefixes
+  cleaned = cleaned.replace(/^(payment to|payment from|direct debit|card payment|pos|purchase)\s*/i, '')
+  return cleaned.substring(0, 80) || 'Transaction'
+}
+
+function parseCSVLocally(csvContent: string, fileName: string): Transaction[] {
+  const lines = csvContent.split('\n').filter(line => line.trim())
+  if (lines.length < 2) return []
+  
+  // Parse header
+  const headerLine = lines[0]
+  const headers = parseCSVLine(headerLine).map(h => h.toLowerCase().trim())
+  
+  // Detect bank format
+  const isRevolut = headers.includes('type') && (headers.includes('completed date') || headers.includes('started date'))
+  const isRelay = headers.some(h => h.includes('date')) && headers.some(h => h.includes('amount')) && fileName.toLowerCase().includes('relay')
+  const isMercury = headers.includes('date') && headers.includes('amount') && headers.includes('bank description')
+  
+  // Find column indices
+  let dateIdx = headers.findIndex(h => h.includes('completed date') || h === 'date' || h.includes('posted'))
+  if (dateIdx === -1) dateIdx = headers.findIndex(h => h.includes('date'))
+  
+  let descIdx = headers.findIndex(h => h === 'description' || h === 'bank description' || h.includes('memo'))
+  if (descIdx === -1) descIdx = headers.findIndex(h => h.includes('name') || h.includes('description'))
+  
+  let amountIdx = headers.findIndex(h => h === 'amount' || h === 'value')
+  if (amountIdx === -1) amountIdx = headers.findIndex(h => h.includes('amount'))
+  
+  const currencyIdx = headers.findIndex(h => h === 'currency')
+  
+  const transactions: Transaction[] = []
+  const bankName = isRevolut ? 'Revolut' : isRelay ? 'Relay' : isMercury ? 'Mercury' : 'Imported'
+  
+  for (let i = 1; i < lines.length; i++) {
+    const values = parseCSVLine(lines[i])
+    if (values.length < 2) continue
+    
+    const amountStr = values[amountIdx] || values[2] || '0'
+    const amount = parseFloat(amountStr.replace(/[^0-9.-]/g, '')) || 0
+    if (amount === 0) continue
+    
+    const rawDesc = values[descIdx] || values[1] || ''
+    const description = cleanDescription(rawDesc)
+    const category = detectCategory(rawDesc)
+    
+    // Detect internal transfers
+    const isInternal = /transfer|between accounts|internal/i.test(rawDesc) && Math.abs(amount) > 100
+    
+    const dateStr = values[dateIdx] || values[0] || ''
+    const date = parseDate(dateStr)
+    
+    const currency = values[currencyIdx] || 'USD'
+    
+    transactions.push({
+      id: `${Date.now()}-${i}-${Math.random().toString(36).substr(2, 6)}`,
+      date,
+      description,
+      reference: rawDesc,
+      bank: bankName,
+      account: currency,
+      type: isInternal ? 'internal' : (amount > 0 ? 'income' : 'expense'),
+      category,
+      amount,
+      currency
+    })
+  }
+  
+  return transactions
+}
+
+function parseCSVLine(line: string): string[] {
+  const values: string[] = []
+  let current = ''
+  let inQuotes = false
+  
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i]
+    if (char === '"') {
+      inQuotes = !inQuotes
+    } else if (char === ',' && !inQuotes) {
+      values.push(current.trim().replace(/^"|"$/g, ''))
+      current = ''
+    } else {
+      current += char
+    }
+  }
+  values.push(current.trim().replace(/^"|"$/g, ''))
+  
+  return values
+}
+
+function parseDate(dateStr: string): string {
+  if (!dateStr) return new Date().toISOString().split('T')[0]
+  
+  // Try various formats
+  const cleaned = dateStr.trim().split(' ')[0] // Remove time part
+  
+  // YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(cleaned)) return cleaned
+  
+  // MM/DD/YYYY or DD/MM/YYYY
+  const parts = cleaned.split(/[\/\-]/)
+  if (parts.length === 3) {
+    const [a, b, c] = parts.map(p => parseInt(p))
+    if (c > 1000) {
+      // MM/DD/YYYY or DD/MM/YYYY
+      if (a > 12) {
+        return `${c}-${String(b).padStart(2, '0')}-${String(a).padStart(2, '0')}`
+      }
+      return `${c}-${String(a).padStart(2, '0')}-${String(b).padStart(2, '0')}`
+    }
+    if (a > 1000) {
+      return `${a}-${String(b).padStart(2, '0')}-${String(c).padStart(2, '0')}`
+    }
+  }
+  
+  // Try native parsing
+  const parsed = new Date(dateStr)
+  if (!isNaN(parsed.getTime())) {
+    return parsed.toISOString().split('T')[0]
+  }
+  
+  return new Date().toISOString().split('T')[0]
+}
+
+// ============================================
+// UPLOAD MODAL - INSTANTÂNEO
 // ============================================
 function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUploadComplete: (transactions: Transaction[], period: string) => void }) {
   const [isDragging, setIsDragging] = useState(false)
   const [files, setFiles] = useState<File[]>([])
-  const [analyzing, setAnalyzing] = useState(false)
+  const [processing, setProcessing] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [currentFile, setCurrentFile] = useState<string>('')
-  const [processedCount, setProcessedCount] = useState(0)
   const [analysisResult, setAnalysisResult] = useState<{ transactions: Transaction[]; summary: any } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   
@@ -760,52 +922,32 @@ function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUpl
     setAnalysisResult(null)
   }
 
-  const analyzeFiles = async () => {
+  const processFiles = async () => {
     if (files.length === 0) return
-    setAnalyzing(true)
+    setProcessing(true)
     setError(null)
     setAnalysisResult(null)
-    setProcessedCount(0)
     
     const period = `${monthNamesShort[selectedMonth]} ${selectedYear}`
     const allTransactions: Transaction[] = []
 
     try {
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i]
-        setCurrentFile(file.name)
-        setProcessedCount(i)
-
+      // Process all files locally - INSTANT
+      for (const file of files) {
         const csvContent = await file.text()
-
-        const response = await fetch('/api/analyze', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            csvContent,
-            fileName: file.name,
-            period
-          })
+        const transactions = parseCSVLocally(csvContent, file.name)
+        
+        // Add period to each transaction
+        transactions.forEach(tx => {
+          tx.period = period
         })
-
-        const result = await response.json()
-
-        if (!response.ok) {
-          console.error('API error:', result)
-          // Continue with other files instead of failing completely
-          continue
-        }
-
-        if (result.transactions) {
-          allTransactions.push(...result.transactions)
-        }
+        
+        allTransactions.push(...transactions)
       }
 
-      setProcessedCount(files.length)
-
       if (allTransactions.length === 0) {
-        setError('Could not extract transactions from the files. Please check the CSV format.')
-        setAnalyzing(false)
+        setError('No valid transactions found. Please check your CSV format.')
+        setProcessing(false)
         return
       }
 
@@ -822,16 +964,15 @@ function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUpl
           incomeCount: allTransactions.filter(t => t.type === 'income').length,
           expenseCount: allTransactions.filter(t => t.type === 'expense').length,
           internalCount: allTransactions.filter(t => t.type === 'internal').length,
-          categories: [...new Set(allTransactions.map(t => t.category))]
+          categories: [...new Set(allTransactions.map(t => t.category).filter(Boolean))]
         }
       })
       
     } catch (err: any) {
       console.error(err)
-      setError('Error processing files. Please try again.')
+      setError('Error processing files: ' + err.message)
     } finally {
-      setAnalyzing(false)
-      setCurrentFile('')
+      setProcessing(false)
     }
   }
 
@@ -842,6 +983,13 @@ function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUpl
     }
   }
 
+  // Auto-process when files are added
+  useEffect(() => {
+    if (files.length > 0 && !analysisResult && !processing) {
+      processFiles()
+    }
+  }, [files])
+
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
@@ -849,8 +997,8 @@ function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUpl
           <div>
             <h3 className="text-lg font-semibold">Upload Statements</h3>
             <p className="text-zinc-500 text-sm flex items-center gap-1.5">
-              <span className="inline-block w-2 h-2 rounded-full bg-emerald-500"></span>
-              Zoop AI Analysis
+              <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              Instant Processing
             </p>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-zinc-800 rounded-lg"><X className="w-5 h-5 text-zinc-400" /></button>
@@ -863,9 +1011,8 @@ function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUpl
             <div className="flex gap-2">
               <select
                 value={selectedMonth}
-                onChange={(e) => { setSelectedMonth(parseInt(e.target.value)); setAnalysisResult(null) }}
-                disabled={analyzing}
-                className="flex-1 bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 focus:outline-none focus:border-emerald-500 cursor-pointer disabled:opacity-50"
+                onChange={(e) => { setSelectedMonth(parseInt(e.target.value)); setAnalysisResult(null); setFiles([]) }}
+                className="flex-1 bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 focus:outline-none focus:border-emerald-500 cursor-pointer"
               >
                 {monthNames.map((month, idx) => (
                   <option key={month} value={idx}>{month}</option>
@@ -873,9 +1020,8 @@ function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUpl
               </select>
               <select
                 value={selectedYear}
-                onChange={(e) => { setSelectedYear(parseInt(e.target.value)); setAnalysisResult(null) }}
-                disabled={analyzing}
-                className="w-24 bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 focus:outline-none focus:border-emerald-500 cursor-pointer disabled:opacity-50"
+                onChange={(e) => { setSelectedYear(parseInt(e.target.value)); setAnalysisResult(null); setFiles([]) }}
+                className="w-24 bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 focus:outline-none focus:border-emerald-500 cursor-pointer"
               >
                 {[2023, 2024, 2025, 2026].map((year) => (
                   <option key={year} value={year}>{year}</option>
@@ -884,8 +1030,8 @@ function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUpl
             </div>
           </div>
 
-          {/* Drop Zone - only show if not analyzing and no result */}
-          {!analyzing && !analysisResult && (
+          {/* Drop Zone */}
+          {!analysisResult && (
             <div
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
@@ -904,140 +1050,97 @@ function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUpl
                 className="hidden"
               />
               <FileUp className={`w-10 h-10 mx-auto mb-3 ${isDragging ? 'text-emerald-400' : 'text-zinc-500'}`} />
-              <p className="text-zinc-400 mb-1">Drag & drop bank statements</p>
-              <p className="text-zinc-600 text-sm mb-3">Revolut, Relay, Mercury CSV files</p>
+              <p className="text-zinc-400 mb-1">Drop your bank statements here</p>
+              <p className="text-zinc-600 text-sm mb-3">Relay, Revolut, Mercury CSV files</p>
               <button type="button" className="bg-zinc-800 hover:bg-zinc-700 text-white font-medium px-4 py-2 rounded-lg transition-colors">
                 Browse Files
               </button>
             </div>
           )}
 
-          {/* File List - show when files selected and not analyzing */}
-          {files.length > 0 && !analyzing && !analysisResult && (
-            <div className="space-y-2">
-              {files.map((file, index) => (
-                <div key={index} className="flex items-center gap-3 p-3 bg-zinc-800 rounded-xl">
-                  <div className="w-8 h-8 rounded-lg bg-emerald-500/20 flex items-center justify-center flex-shrink-0">
-                    <FileUp className="w-4 h-4 text-emerald-400" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{file.name}</p>
-                    <p className="text-zinc-500 text-xs">{(file.size / 1024).toFixed(1)} KB</p>
-                  </div>
-                  <button onClick={() => removeFile(index)} className="p-1.5 hover:bg-zinc-700 rounded-lg flex-shrink-0">
-                    <X className="w-4 h-4 text-zinc-400" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Analyzing State */}
-          {analyzing && (
-            <div className="py-8">
-              <div className="flex flex-col items-center">
-                {/* Animated Logo */}
-                <div className="relative mb-6">
-                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center font-bold text-2xl text-black">
-                    Z
-                  </div>
-                  <div className="absolute inset-0 rounded-2xl bg-emerald-500 animate-ping opacity-20"></div>
-                </div>
-                
-                <p className="text-lg font-semibold text-white mb-1">Zoop AI analyzing...</p>
-                <p className="text-zinc-500 text-sm mb-4">
-                  {currentFile ? `Processing: ${currentFile}` : 'Preparing...'}
-                </p>
-                
-                {/* Progress bar */}
-                <div className="w-full max-w-xs">
-                  <div className="flex justify-between text-xs text-zinc-500 mb-1">
-                    <span>Progress</span>
-                    <span>{processedCount}/{files.length} files</span>
-                  </div>
-                  <div className="h-2 bg-zinc-800 rounded-full overflow-hidden">
-                    <div 
-                      className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300"
-                      style={{ width: `${files.length > 0 ? ((processedCount + 0.5) / files.length) * 100 : 0}%` }}
-                    />
-                  </div>
-                </div>
-
-                <p className="text-zinc-600 text-xs mt-4">Categorizing transactions automatically</p>
-              </div>
+          {/* Processing indicator */}
+          {processing && (
+            <div className="flex items-center justify-center gap-3 py-8">
+              <div className="w-5 h-5 border-2 border-emerald-500/30 border-t-emerald-500 rounded-full animate-spin" />
+              <span className="text-zinc-400">Processing {files.length} file{files.length > 1 ? 's' : ''}...</span>
             </div>
           )}
 
           {/* Analysis Result */}
           {analysisResult && (
             <div className="space-y-4">
-              <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-xl">
-                <div className="flex items-center gap-2 mb-3">
-                  <div className="w-6 h-6 rounded-full bg-emerald-500 flex items-center justify-center">
-                    <span className="text-black text-sm">✓</span>
-                  </div>
-                  <span className="font-semibold text-emerald-400">Analysis Complete</span>
+              {/* Success header */}
+              <div className="flex items-center gap-2 text-emerald-400">
+                <div className="w-6 h-6 rounded-full bg-emerald-500 flex items-center justify-center">
+                  <span className="text-black text-sm font-bold">✓</span>
                 </div>
-                
-                <div className="grid grid-cols-3 gap-3 mb-3">
-                  <div className="bg-zinc-900/50 rounded-lg p-3 text-center">
-                    <p className="text-2xl font-bold text-emerald-400">{analysisResult.summary.incomeCount}</p>
-                    <p className="text-xs text-zinc-500">Income</p>
-                  </div>
-                  <div className="bg-zinc-900/50 rounded-lg p-3 text-center">
-                    <p className="text-2xl font-bold text-red-400">{analysisResult.summary.expenseCount}</p>
-                    <p className="text-xs text-zinc-500">Expenses</p>
-                  </div>
-                  <div className="bg-zinc-900/50 rounded-lg p-3 text-center">
-                    <p className="text-2xl font-bold text-blue-400">{analysisResult.summary.internalCount}</p>
-                    <p className="text-xs text-zinc-500">Internal</p>
-                  </div>
-                </div>
+                <span className="font-semibold">Ready to Import</span>
+                <span className="text-zinc-500 text-sm ml-auto">{files.length} file{files.length > 1 ? 's' : ''}</span>
+              </div>
 
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-zinc-400">Total Income</span>
-                    <span className="text-emerald-400 font-semibold">{formatCurrency(analysisResult.summary.income)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-zinc-400">Total Expenses</span>
-                    <span className="text-red-400 font-semibold">{formatCurrency(analysisResult.summary.expenses)}</span>
-                  </div>
-                  <div className="flex justify-between pt-2 border-t border-emerald-500/20">
-                    <span className="text-zinc-300 font-medium">Net Result</span>
-                    <span className={`font-bold ${analysisResult.summary.income - analysisResult.summary.expenses >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                      {formatCurrency(analysisResult.summary.income - analysisResult.summary.expenses)}
-                    </span>
-                  </div>
+              {/* Stats grid */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4 text-center">
+                  <p className="text-3xl font-bold text-emerald-400">{analysisResult.summary.incomeCount}</p>
+                  <p className="text-xs text-zinc-500 mt-1">Income</p>
+                  <p className="text-sm text-emerald-400/70 font-medium">{formatCurrency(analysisResult.summary.income)}</p>
+                </div>
+                <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-center">
+                  <p className="text-3xl font-bold text-red-400">{analysisResult.summary.expenseCount}</p>
+                  <p className="text-xs text-zinc-500 mt-1">Expenses</p>
+                  <p className="text-sm text-red-400/70 font-medium">{formatCurrency(analysisResult.summary.expenses)}</p>
+                </div>
+                <div className="bg-blue-500/10 border border-blue-500/30 rounded-xl p-4 text-center">
+                  <p className="text-3xl font-bold text-blue-400">{analysisResult.summary.internalCount}</p>
+                  <p className="text-xs text-zinc-500 mt-1">Transfers</p>
+                  <p className="text-sm text-blue-400/70 font-medium">Internal</p>
+                </div>
+              </div>
+
+              {/* Net result */}
+              <div className="bg-zinc-800/50 rounded-xl p-4">
+                <div className="flex justify-between items-center">
+                  <span className="text-zinc-400">Net Result</span>
+                  <span className={`text-2xl font-bold ${analysisResult.summary.income - analysisResult.summary.expenses >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {formatCurrency(analysisResult.summary.income - analysisResult.summary.expenses)}
+                  </span>
                 </div>
               </div>
 
               {/* Categories */}
               {analysisResult.summary.categories.length > 0 && (
-                <div className="p-3 bg-zinc-800/50 rounded-xl">
-                  <p className="text-zinc-400 text-xs mb-2">Categories detected:</p>
-                  <div className="flex flex-wrap gap-1">
-                    {analysisResult.summary.categories.filter((c: string) => c).map((cat: string) => (
-                      <span key={cat} className="px-2 py-1 bg-zinc-700 rounded text-xs">{cat}</span>
+                <div>
+                  <p className="text-zinc-500 text-xs mb-2">Auto-categorized:</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {analysisResult.summary.categories.map((cat: string) => (
+                      <span key={cat} className="px-2.5 py-1 bg-zinc-800 border border-zinc-700 rounded-lg text-xs font-medium">{cat}</span>
                     ))}
                   </div>
                 </div>
               )}
 
               {/* Preview */}
-              <div className="max-h-32 overflow-y-auto space-y-1">
-                <p className="text-zinc-400 text-xs mb-2">Preview:</p>
-                {analysisResult.transactions.slice(0, 3).map((tx, i) => (
-                  <div key={i} className="flex items-center justify-between p-2 bg-zinc-800/50 rounded-lg text-sm">
-                    <div className="flex-1 min-w-0">
-                      <p className="truncate text-sm">{tx.description}</p>
-                      <p className="text-zinc-500 text-xs">{tx.category}</p>
+              <div>
+                <p className="text-zinc-500 text-xs mb-2">Preview:</p>
+                <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                  {analysisResult.transactions.slice(0, 4).map((tx, i) => (
+                    <div key={i} className="flex items-center justify-between p-2.5 bg-zinc-800/50 rounded-lg">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm truncate">{tx.description}</p>
+                        <p className="text-zinc-600 text-xs">{tx.category} • {tx.bank}</p>
+                      </div>
+                      <span className={`text-sm font-semibold ml-3 ${tx.type === 'income' ? 'text-emerald-400' : tx.type === 'expense' ? 'text-red-400' : 'text-blue-400'}`}>
+                        {tx.type === 'income' ? '+' : tx.type === 'expense' ? '-' : '↔'}
+                        {formatCurrency(Math.abs(tx.amount), tx.currency)}
+                      </span>
                     </div>
-                    <span className={`font-semibold ml-2 ${tx.type === 'income' ? 'text-emerald-400' : tx.type === 'expense' ? 'text-red-400' : 'text-blue-400'}`}>
-                      {tx.type === 'income' ? '+' : '-'}{formatCurrency(Math.abs(tx.amount), tx.currency)}
-                    </span>
-                  </div>
-                ))}
+                  ))}
+                  {analysisResult.transactions.length > 4 && (
+                    <p className="text-zinc-600 text-xs text-center py-1">
+                      +{analysisResult.transactions.length - 4} more transactions
+                    </p>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -1050,33 +1153,20 @@ function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUpl
           )}
 
           {/* Action Buttons */}
-          {!analyzing && (
+          {analysisResult && (
             <div className="flex gap-3 pt-2">
-              {!analysisResult ? (
-                <button
-                  onClick={analyzeFiles}
-                  disabled={files.length === 0}
-                  className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 disabled:bg-zinc-700 disabled:text-zinc-500 text-black font-semibold rounded-xl transition-colors flex items-center justify-center gap-2"
-                >
-                  <span className="text-lg">⚡</span>
-                  Analyze with Zoop AI
-                </button>
-              ) : (
-                <>
-                  <button
-                    onClick={() => { setAnalysisResult(null); setFiles([]) }}
-                    className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-medium"
-                  >
-                    Start Over
-                  </button>
-                  <button
-                    onClick={confirmImport}
-                    className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold rounded-xl transition-colors"
-                  >
-                    Import {analysisResult.transactions.length} Transactions
-                  </button>
-                </>
-              )}
+              <button
+                onClick={() => { setAnalysisResult(null); setFiles([]) }}
+                className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-medium transition-colors"
+              >
+                Add More Files
+              </button>
+              <button
+                onClick={confirmImport}
+                className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold rounded-xl transition-colors"
+              >
+                Import {analysisResult.transactions.length} Transactions
+              </button>
             </div>
           )}
         </div>
