@@ -590,10 +590,13 @@ export default function Dashboard() {
 // ============================================
 function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUploadComplete: (transactions: Transaction[]) => void }) {
   const [isDragging, setIsDragging] = useState(false)
-  const [file, setFile] = useState<File | null>(null)
+  const [files, setFiles] = useState<File[]>([])
   const [parsing, setParsing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [progress, setProgress] = useState<string>('')
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const acceptedTypes = ['.csv', '.zip', 'text/csv', 'application/zip', 'application/x-zip-compressed']
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault()
@@ -608,101 +611,181 @@ function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUpl
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(false)
-    const droppedFile = e.dataTransfer.files[0]
-    if (droppedFile && droppedFile.type === 'text/csv') {
-      setFile(droppedFile)
+    const droppedFiles = Array.from(e.dataTransfer.files).filter(f => 
+      f.name.endsWith('.csv') || f.name.endsWith('.zip')
+    )
+    if (droppedFiles.length > 0) {
+      setFiles(prev => [...prev, ...droppedFiles])
       setError(null)
     } else {
-      setError('Please upload a CSV file')
+      setError('Please upload CSV or ZIP files')
     }
   }
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0]
-    if (selectedFile) {
-      setFile(selectedFile)
+    const selectedFiles = Array.from(e.target.files || [])
+    if (selectedFiles.length > 0) {
+      setFiles(prev => [...prev, ...selectedFiles])
       setError(null)
     }
   }
 
-  const parseCSV = async () => {
-    if (!file) return
-    setParsing(true)
-    setError(null)
+  const removeFile = (index: number) => {
+    setFiles(prev => prev.filter((_, i) => i !== index))
+  }
 
-    try {
-      const text = await file.text()
-      const lines = text.split('\n').filter(line => line.trim())
-      const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/"/g, ''))
-      
-      const transactions: Transaction[] = []
-      
-      for (let i = 1; i < lines.length; i++) {
-        const values = lines[i].split(',').map(v => v.trim().replace(/"/g, ''))
-        if (values.length < 3) continue
+  const parseCSVContent = (text: string, fileName: string): Transaction[] => {
+    const lines = text.split('\n').filter(line => line.trim())
+    if (lines.length < 2) return []
+    
+    const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/"/g, ''))
+    const transactions: Transaction[] = []
+    
+    // Detect bank from headers
+    const isRevolut = headers.includes('type') && (headers.includes('completed date') || headers.includes('started date'))
+    const isRelay = headers.includes('date') && headers.includes('amount') && headers.includes('description')
 
-        // Try to detect bank format
-        const isRevolut = headers.includes('type') && headers.includes('completed date')
-        const isRelay = headers.includes('date') && headers.includes('amount')
-
-        let tx: Transaction | null = null
-
-        if (isRevolut) {
-          // Revolut format
-          const dateIdx = headers.indexOf('completed date') !== -1 ? headers.indexOf('completed date') : headers.indexOf('date')
-          const descIdx = headers.indexOf('description')
-          const amountIdx = headers.indexOf('amount')
-          const currencyIdx = headers.indexOf('currency')
-          
-          const amount = parseFloat(values[amountIdx]) || 0
-          tx = {
-            id: crypto.randomUUID(),
-            date: values[dateIdx] || new Date().toISOString().split('T')[0],
-            description: values[descIdx] || 'Unknown',
-            reference: '',
-            bank: 'Revolut',
-            account: values[currencyIdx] || 'USD',
-            type: amount > 0 ? 'income' : 'expense',
-            category: 'Uncategorized',
-            amount: amount,
-            currency: values[currencyIdx] || 'USD'
-          }
+    for (let i = 1; i < lines.length; i++) {
+      // Handle CSV with quoted values containing commas
+      const values: string[] = []
+      let current = ''
+      let inQuotes = false
+      for (const char of lines[i]) {
+        if (char === '"') {
+          inQuotes = !inQuotes
+        } else if (char === ',' && !inQuotes) {
+          values.push(current.trim().replace(/"/g, ''))
+          current = ''
         } else {
-          // Generic CSV format
-          const dateIdx = headers.findIndex(h => h.includes('date'))
-          const descIdx = headers.findIndex(h => h.includes('description') || h.includes('memo') || h.includes('name'))
-          const amountIdx = headers.findIndex(h => h.includes('amount') || h.includes('value'))
-          
-          const amount = parseFloat(values[amountIdx]) || 0
-          tx = {
-            id: crypto.randomUUID(),
-            date: values[dateIdx] || new Date().toISOString().split('T')[0],
-            description: values[descIdx] || values[1] || 'Unknown',
-            reference: '',
-            bank: 'Imported',
-            account: 'Main',
-            type: amount > 0 ? 'income' : 'expense',
-            category: 'Uncategorized',
-            amount: amount,
-            currency: 'USD'
-          }
+          current += char
         }
+      }
+      values.push(current.trim().replace(/"/g, ''))
+      
+      if (values.length < 3) continue
 
-        if (tx && tx.amount !== 0) {
-          transactions.push(tx)
+      let tx: Transaction | null = null
+
+      if (isRevolut) {
+        const dateIdx = headers.indexOf('completed date') !== -1 ? headers.indexOf('completed date') : headers.indexOf('started date')
+        const descIdx = headers.indexOf('description')
+        const amountIdx = headers.indexOf('amount')
+        const currencyIdx = headers.indexOf('currency')
+        
+        const amount = parseFloat(values[amountIdx]) || 0
+        if (amount === 0) continue
+        
+        tx = {
+          id: crypto.randomUUID(),
+          date: values[dateIdx]?.split(' ')[0] || new Date().toISOString().split('T')[0],
+          description: values[descIdx] || 'Unknown',
+          reference: '',
+          bank: 'Revolut',
+          account: values[currencyIdx] || 'USD',
+          type: amount > 0 ? 'income' : 'expense',
+          category: 'Uncategorized',
+          amount: amount,
+          currency: values[currencyIdx] || 'USD'
+        }
+      } else if (isRelay) {
+        const dateIdx = headers.indexOf('date')
+        const descIdx = headers.indexOf('description')
+        const amountIdx = headers.indexOf('amount')
+        
+        const amount = parseFloat(values[amountIdx]?.replace(/[^0-9.-]/g, '')) || 0
+        if (amount === 0) continue
+        
+        tx = {
+          id: crypto.randomUUID(),
+          date: values[dateIdx] || new Date().toISOString().split('T')[0],
+          description: values[descIdx] || 'Unknown',
+          reference: '',
+          bank: 'Relay',
+          account: 'Main',
+          type: amount > 0 ? 'income' : 'expense',
+          category: 'Uncategorized',
+          amount: amount,
+          currency: 'USD'
+        }
+      } else {
+        // Generic format
+        const dateIdx = headers.findIndex(h => h.includes('date'))
+        const descIdx = headers.findIndex(h => h.includes('description') || h.includes('memo') || h.includes('name'))
+        const amountIdx = headers.findIndex(h => h.includes('amount') || h.includes('value'))
+        
+        const amount = parseFloat(values[amountIdx >= 0 ? amountIdx : 1]?.replace(/[^0-9.-]/g, '')) || 0
+        if (amount === 0) continue
+        
+        tx = {
+          id: crypto.randomUUID(),
+          date: values[dateIdx >= 0 ? dateIdx : 0] || new Date().toISOString().split('T')[0],
+          description: values[descIdx >= 0 ? descIdx : 1] || 'Unknown',
+          reference: '',
+          bank: fileName.toLowerCase().includes('revolut') ? 'Revolut' : fileName.toLowerCase().includes('relay') ? 'Relay' : 'Imported',
+          account: 'Main',
+          type: amount > 0 ? 'income' : 'expense',
+          category: 'Uncategorized',
+          amount: amount,
+          currency: 'USD'
         }
       }
 
-      if (transactions.length === 0) {
-        setError('No valid transactions found in file')
+      if (tx) {
+        transactions.push(tx)
+      }
+    }
+
+    return transactions
+  }
+
+  const processFiles = async () => {
+    if (files.length === 0) return
+    setParsing(true)
+    setError(null)
+    
+    const allTransactions: Transaction[] = []
+
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i]
+        setProgress(`Processing ${i + 1}/${files.length}: ${file.name}`)
+
+        if (file.name.endsWith('.zip')) {
+          // Process ZIP file
+          const JSZip = (await import('jszip')).default
+          const zip = await JSZip.loadAsync(file)
+          
+          const csvFiles = Object.keys(zip.files).filter(name => name.endsWith('.csv'))
+          
+          for (const csvName of csvFiles) {
+            const csvContent = await zip.files[csvName].async('string')
+            const txs = parseCSVContent(csvContent, csvName)
+            allTransactions.push(...txs)
+          }
+        } else if (file.name.endsWith('.csv')) {
+          // Process CSV file
+          const text = await file.text()
+          const txs = parseCSVContent(text, file.name)
+          allTransactions.push(...txs)
+        }
+      }
+
+      if (allTransactions.length === 0) {
+        setError('No valid transactions found in the uploaded files')
         setParsing(false)
+        setProgress('')
         return
       }
 
-      onUploadComplete(transactions)
+      setProgress(`Imported ${allTransactions.length} transactions!`)
+      setTimeout(() => {
+        onUploadComplete(allTransactions)
+      }, 500)
     } catch (err) {
-      setError('Error parsing file. Please check the format.')
+      console.error(err)
+      setError('Error processing files. Please check the format.')
       setParsing(false)
+      setProgress('')
     }
   }
 
@@ -710,74 +793,85 @@ function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUpl
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-md">
         <div className="p-5 border-b border-zinc-800 flex items-center justify-between">
-          <h3 className="text-lg font-semibold">Upload Statement</h3>
+          <h3 className="text-lg font-semibold">Upload Statements</h3>
           <button onClick={onClose} className="p-2 hover:bg-zinc-800 rounded-lg"><X className="w-5 h-5 text-zinc-400" /></button>
         </div>
         
         <div className="p-5">
-          {!file ? (
-            <div
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
-              className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer ${
-                isDragging ? 'border-emerald-500 bg-emerald-500/10' : 'border-zinc-700 hover:border-zinc-600'
-              }`}
-              onClick={() => fileInputRef.current?.click()}
+          <div
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors cursor-pointer ${
+              isDragging ? 'border-emerald-500 bg-emerald-500/10' : 'border-zinc-700 hover:border-zinc-600'
+            }`}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,.zip"
+              multiple
+              onChange={handleFileSelect}
+              className="hidden"
+            />
+            <FileUp className={`w-10 h-10 mx-auto mb-3 ${isDragging ? 'text-emerald-400' : 'text-zinc-500'}`} />
+            <p className="text-zinc-400 mb-1">Drag & drop your bank statements</p>
+            <p className="text-zinc-600 text-sm mb-3">CSV or ZIP files • Multiple files supported</p>
+            <button 
+              type="button"
+              className="bg-zinc-800 hover:bg-zinc-700 text-white font-medium px-4 py-2 rounded-lg transition-colors"
             >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".csv"
-                onChange={handleFileSelect}
-                className="hidden"
-              />
-              <FileUp className={`w-12 h-12 mx-auto mb-4 ${isDragging ? 'text-emerald-400' : 'text-zinc-500'}`} />
-              <p className="text-zinc-400 mb-2">Drag & drop your bank statement</p>
-              <p className="text-zinc-600 text-sm mb-4">Supports: CSV from Revolut, Relay, or generic format</p>
-              <button 
-                type="button"
-                className="bg-zinc-800 hover:bg-zinc-700 text-white font-medium px-4 py-2 rounded-lg transition-colors"
-              >
-                Browse Files
-              </button>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <div className="flex items-center gap-3 p-4 bg-zinc-800 rounded-xl">
-                <div className="w-10 h-10 rounded-lg bg-emerald-500/20 flex items-center justify-center">
-                  <FileUp className="w-5 h-5 text-emerald-400" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium truncate">{file.name}</p>
-                  <p className="text-zinc-500 text-sm">{(file.size / 1024).toFixed(1)} KB</p>
-                </div>
-                <button onClick={() => setFile(null)} className="p-2 hover:bg-zinc-700 rounded-lg">
-                  <X className="w-4 h-4 text-zinc-400" />
-                </button>
-              </div>
+              Browse Files
+            </button>
+          </div>
 
-              {error && (
-                <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
-                  {error}
+          {files.length > 0 && (
+            <div className="mt-4 space-y-2 max-h-48 overflow-y-auto">
+              {files.map((file, index) => (
+                <div key={index} className="flex items-center gap-3 p-3 bg-zinc-800 rounded-xl">
+                  <div className="w-8 h-8 rounded-lg bg-emerald-500/20 flex items-center justify-center flex-shrink-0">
+                    <FileUp className="w-4 h-4 text-emerald-400" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{file.name}</p>
+                    <p className="text-zinc-500 text-xs">{(file.size / 1024).toFixed(1)} KB</p>
+                  </div>
+                  <button onClick={() => removeFile(index)} className="p-1.5 hover:bg-zinc-700 rounded-lg flex-shrink-0">
+                    <X className="w-4 h-4 text-zinc-400" />
+                  </button>
                 </div>
+              ))}
+            </div>
+          )}
+
+          {error && (
+            <div className="mt-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+              {error}
+            </div>
+          )}
+
+          {progress && !error && (
+            <div className="mt-4 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg text-emerald-400 text-sm">
+              {progress}
+            </div>
+          )}
+
+          {files.length > 0 && (
+            <button
+              onClick={processFiles}
+              disabled={parsing}
+              className="w-full mt-4 py-3 bg-emerald-500 hover:bg-emerald-400 disabled:bg-zinc-700 text-black font-semibold rounded-xl transition-colors flex items-center justify-center gap-2"
+            >
+              {parsing ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />
+                  Processing...
+                </>
+              ) : (
+                `Import ${files.length} file${files.length > 1 ? 's' : ''}`
               )}
-
-              <button
-                onClick={parseCSV}
-                disabled={parsing}
-                className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 disabled:bg-zinc-700 text-black font-semibold rounded-xl transition-colors flex items-center justify-center gap-2"
-              >
-                {parsing ? (
-                  <>
-                    <div className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />
-                    Processing...
-                  </>
-                ) : (
-                  'Import Transactions'
-                )}
-              </button>
-            </div>
+            </button>
           )}
         </div>
       </div>
