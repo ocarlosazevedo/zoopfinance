@@ -725,8 +725,8 @@ const categoryRules: { pattern: RegExp; category: string }[] = [
   { pattern: /fedex|ups|usps|dhl|shipstation|shippo|easypost|fulfillment|shipping|postage/i, category: 'Shipping' },
   // Fees
   { pattern: /fee|charge|interest|penalty|overdraft|wire fee|monthly service/i, category: 'Fees' },
-  // Transfers - Internal
-  { pattern: /transfer|ach|wire|internal|between accounts|savings|checking|backup|operacional/i, category: 'Transfer' },
+  // Transfers - Internal (only actual bank accounts, not business units)
+  { pattern: /^(business savings|business checking|savings account|checking account)$/i, category: 'Transfer' },
   // Refunds
   { pattern: /refund|chargeback|dispute|reversal|return/i, category: 'Refunds' },
 ]
@@ -837,12 +837,21 @@ function parseCSVLocally(csvContent: string, fileName: string): Transaction[] {
     // Detect transaction type
     let type: 'income' | 'expense' | 'internal' = amount > 0 ? 'income' : 'expense'
     
-    // Check for internal transfers
+    // Check for internal transfers (only between own bank accounts)
+    // Business Savings, Business Checking = internal accounts
+    // Nutra, Operacional, etc. = external income sources
+    const internalAccounts = /^(business savings|business checking|savings|checking|backup)/i
+    
     if (isRelay && txType) {
-      if (txType.toLowerCase().includes('transfer')) {
+      const isTxTransfer = txType.toLowerCase().includes('transfer')
+      const isInternalAccount = internalAccounts.test(payee)
+      
+      if (isTxTransfer && isInternalAccount) {
+        // Only mark as internal if it's between own accounts
         type = 'internal'
       }
-    } else if (/transfer|between accounts|internal|savings|checking/i.test(`${payee} ${rawDesc} ${reference}`)) {
+      // Otherwise keep as income/expense based on amount
+    } else if (internalAccounts.test(payee)) {
       type = 'internal'
     }
     
