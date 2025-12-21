@@ -13,56 +13,39 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No CSV content provided' }, { status: 400 })
     }
 
-    const systemPrompt = `You are a financial analyst AI that processes bank statements. Your job is to:
+    const systemPrompt = `You are a financial data processor. Parse bank statement CSVs and output ONLY a JSON array.
 
-1. Parse the CSV data and extract transactions
-2. Categorize each transaction intelligently based on the description
-3. Identify the transaction type (income, expense, or internal transfer)
-4. Clean up and standardize descriptions
-5. Detect the bank/source from the data format
-
-Categories to use:
-- Sales: Shopify payouts, Stripe, payment processors, e-commerce revenue
-- Ads: Facebook Ads, Google Ads, TikTok Ads, advertising spend
-- Software: SaaS subscriptions, tools, software services
-- Payroll: Salaries, contractor payments, team payments
-- Shipping: Logistics, fulfillment, delivery costs
-- Fees: Bank fees, processing fees, platform fees
-- Transfer: Internal transfers between accounts (mark as type "internal")
+CATEGORIES:
+- Sales: Shopify, Stripe, PayPal payouts, e-commerce revenue
+- Ads: Facebook Ads, Google Ads, TikTok Ads, Meta
+- Software: SaaS, subscriptions, tools
+- Payroll: Salaries, contractor payments
+- Shipping: Logistics, fulfillment, delivery
+- Fees: Bank fees, processing fees
+- Transfer: Internal transfers between own accounts
 - Refunds: Customer refunds, chargebacks
-- Other: Anything that doesn't fit above
+- Other: Everything else
 
-Rules:
-- Positive amounts are income, negative are expenses
-- Transfers between own accounts should be type "internal"
-- Keep original currency
-- Use the transaction date from the CSV
-- Clean up ALL CAPS descriptions to Title Case
-- Remove unnecessary prefixes like "PAYMENT TO" or "DIRECT DEBIT"
+RULES:
+- Positive amounts = income
+- Negative amounts = expense
+- Transfers between own accounts = type "internal"
+- Clean ALL CAPS to Title Case
+- Output ONLY the JSON array, nothing else
+- No markdown, no explanations, no text before or after
 
-Respond ONLY with valid JSON array, no markdown, no explanation. Each transaction object must have:
-{
-  "date": "YYYY-MM-DD",
-  "description": "Clean description",
-  "amount": number (positive for income, negative for expense),
-  "currency": "USD/EUR/GBP/BRL",
-  "type": "income" | "expense" | "internal",
-  "category": "Sales" | "Ads" | "Software" | "Payroll" | "Shipping" | "Fees" | "Transfer" | "Refunds" | "Other",
-  "bank": "Detected bank name",
-  "originalDescription": "Original raw description"
-}`
+OUTPUT FORMAT - JSON array only:
+[{"date":"YYYY-MM-DD","description":"Clean name","amount":123.45,"currency":"USD","type":"income","category":"Sales","bank":"Revolut","originalDescription":"RAW DESC"}]`
 
-    const userPrompt = `Analyze this bank statement CSV from file "${fileName}" for period "${period}":
+    const userPrompt = `Parse this CSV and return ONLY a JSON array of transactions:
 
-\`\`\`csv
 ${csvContent}
-\`\`\`
 
-Return ONLY a JSON array of transaction objects. No other text.`
+Remember: Output ONLY the JSON array, no other text.`
 
     const message = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 8000,
+      max_tokens: 16000,
       messages: [
         {
           role: 'user',
@@ -81,39 +64,53 @@ Return ONLY a JSON array of transaction objects. No other text.`
     // Parse JSON response
     let transactions
     try {
-      // Clean up response - remove markdown if present
+      // Clean up response - remove markdown and extra text
       let jsonStr = textContent.text.trim()
-      if (jsonStr.startsWith('```json')) {
-        jsonStr = jsonStr.slice(7)
+      
+      // Find JSON array in response
+      const jsonStart = jsonStr.indexOf('[')
+      const jsonEnd = jsonStr.lastIndexOf(']')
+      
+      if (jsonStart === -1 || jsonEnd === -1) {
+        console.error('No JSON array found in response:', jsonStr.substring(0, 500))
+        throw new Error('No valid JSON array in response')
       }
-      if (jsonStr.startsWith('```')) {
-        jsonStr = jsonStr.slice(3)
-      }
-      if (jsonStr.endsWith('```')) {
-        jsonStr = jsonStr.slice(0, -3)
-      }
-      jsonStr = jsonStr.trim()
+      
+      jsonStr = jsonStr.substring(jsonStart, jsonEnd + 1)
       
       transactions = JSON.parse(jsonStr)
+      
+      if (!Array.isArray(transactions)) {
+        throw new Error('Response is not an array')
+      }
     } catch (parseError) {
-      console.error('Failed to parse Claude response:', textContent.text)
+      console.error('Failed to parse Claude response:', textContent.text.substring(0, 1000))
       throw new Error('Failed to parse AI response as JSON')
     }
 
     // Validate and add IDs
-    const processedTransactions = transactions.map((tx: any, index: number) => ({
-      id: `${Date.now()}-${index}`,
-      date: tx.date || new Date().toISOString().split('T')[0],
-      description: tx.description || 'Unknown',
-      amount: typeof tx.amount === 'number' ? tx.amount : parseFloat(tx.amount) || 0,
-      currency: tx.currency || 'USD',
-      type: tx.type || (tx.amount > 0 ? 'income' : 'expense'),
-      category: tx.category || 'Other',
-      bank: tx.bank || 'Unknown',
-      account: tx.currency || 'Main',
-      reference: tx.originalDescription || '',
-      period: period
-    }))
+    const processedTransactions = transactions
+      .filter((tx: any) => {
+        // Filter out invalid transactions
+        const amount = typeof tx.amount === 'number' ? tx.amount : parseFloat(tx.amount)
+        return !isNaN(amount) && amount !== 0
+      })
+      .map((tx: any, index: number) => {
+        const amount = typeof tx.amount === 'number' ? tx.amount : parseFloat(tx.amount) || 0
+        return {
+          id: `${Date.now()}-${index}`,
+          date: tx.date || new Date().toISOString().split('T')[0],
+          description: tx.description || tx.originalDescription || 'Unknown',
+          amount: amount,
+          currency: tx.currency || 'USD',
+          type: tx.type || (amount > 0 ? 'income' : 'expense'),
+          category: tx.category || 'Other',
+          bank: tx.bank || 'Imported',
+          account: tx.currency || 'Main',
+          reference: tx.originalDescription || '',
+          period: period
+        }
+      })
 
     return NextResponse.json({ 
       success: true, 
