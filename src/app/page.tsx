@@ -707,28 +707,33 @@ export default function Dashboard() {
 // LOCAL CSV PARSER - INSTANTÂNEO
 // ============================================
 const categoryRules: { pattern: RegExp; category: string }[] = [
-  // Advertising - PRIORITY (most common for you)
+  // Advertising - PRIORITY (most common)
   { pattern: /facebook|meta ads|meta_ads|fb ads/i, category: 'Ads' },
-  { pattern: /google ads|googleads|dl\*google|dL\*google/i, category: 'Ads' },
+  { pattern: /google ads|googleads|dl\*google|dl \*google/i, category: 'Ads' },
   { pattern: /tiktok|snapchat|pinterest ads|twitter ads|linkedin ads/i, category: 'Ads' },
+  { pattern: /adspower/i, category: 'Ads' },
   // Sales / Revenue
   { pattern: /shopify|stripe payout|paypal payout|amazon payout|etsy|ebay deposit/i, category: 'Sales' },
-  { pattern: /nutra|revenue|sales|payout|deposit from/i, category: 'Sales' },
+  { pattern: /block craft|dinheiro adicionado/i, category: 'Sales' },  // Revolut topups from business
   // Software / SaaS
   { pattern: /notion|slack|zoom|github|vercel|aws|google cloud|heroku|digitalocean/i, category: 'Software' },
   { pattern: /openai|anthropic|zapier|airtable|figma|canva|adobe|microsoft|dropbox|1password/i, category: 'Software' },
   { pattern: /stape|tracking|pixel|analytics/i, category: 'Software' },
   { pattern: /pagouai|pagou ai/i, category: 'Software' },
+  { pattern: /hostinger|namecheap|godaddy|cloudflare/i, category: 'Software' },
   // Payroll
   { pattern: /payroll|salary|gusto|deel|remote\.com|wise transfer|contractor|employee/i, category: 'Payroll' },
   // Shipping / Logistics
   { pattern: /fedex|ups|usps|dhl|shipstation|shippo|easypost|fulfillment|shipping|postage/i, category: 'Shipping' },
   // Fees
-  { pattern: /fee|charge|interest|penalty|overdraft|wire fee|monthly service/i, category: 'Fees' },
-  // Transfers - Internal (only actual bank accounts, not business units)
+  { pattern: /\bfee\b|charge|interest|penalty|overdraft|wire fee|monthly service/i, category: 'Fees' },
+  // Transfers - Internal (only actual bank accounts)
   { pattern: /^(business savings|business checking|savings account|checking account)$/i, category: 'Transfer' },
+  { pattern: /^(para main|de main|from main|to main)$/i, category: 'Transfer' },
   // Refunds
   { pattern: /refund|chargeback|dispute|reversal|return/i, category: 'Refunds' },
+  // Office / Operations
+  { pattern: /chaveiro|office|supplies|equipment/i, category: 'Operations' },
 ]
 
 function detectCategory(description: string, payee?: string): string {
@@ -770,110 +775,160 @@ function parseCSVLocally(csvContent: string, fileName: string): Transaction[] {
   const headerLine = lines[0]
   const headers = parseCSVLine(headerLine).map(h => h.toLowerCase().trim())
   
-  console.log('CSV Headers:', headers) // Debug
-  
   // Detect bank format
   const isRelay = headers.includes('payee') && headers.includes('transaction type')
-  const isRevolut = headers.includes('type') && (headers.includes('completed date') || headers.includes('started date'))
+  const isRevolut = headers.some(h => h.includes('date started') || h.includes('date completed')) && headers.includes('type')
   const isMercury = headers.includes('bank description')
-  
-  // Find column indices based on format
-  let dateIdx: number, descIdx: number, amountIdx: number, currencyIdx: number, payeeIdx: number, txTypeIdx: number, refIdx: number
-  
-  if (isRelay) {
-    // Relay format: Date,Payee,Account #,Transaction Type,Description,Reference,Status,Amount,Currency,Balance
-    dateIdx = headers.indexOf('date')
-    payeeIdx = headers.indexOf('payee')
-    descIdx = headers.indexOf('description')
-    amountIdx = headers.indexOf('amount')
-    currencyIdx = headers.indexOf('currency')
-    txTypeIdx = headers.indexOf('transaction type')
-    refIdx = headers.indexOf('reference')
-  } else if (isRevolut) {
-    // Revolut format
-    dateIdx = headers.indexOf('completed date')
-    if (dateIdx === -1) dateIdx = headers.indexOf('started date')
-    descIdx = headers.indexOf('description')
-    amountIdx = headers.indexOf('amount')
-    currencyIdx = headers.indexOf('currency')
-    payeeIdx = -1
-    txTypeIdx = headers.indexOf('type')
-    refIdx = -1
-  } else {
-    // Generic format
-    dateIdx = headers.findIndex(h => h.includes('date'))
-    descIdx = headers.findIndex(h => h.includes('description') || h.includes('memo'))
-    amountIdx = headers.findIndex(h => h.includes('amount') || h.includes('value'))
-    currencyIdx = headers.findIndex(h => h.includes('currency'))
-    payeeIdx = headers.findIndex(h => h.includes('payee') || h.includes('name') || h.includes('merchant'))
-    txTypeIdx = -1
-    refIdx = -1
-  }
   
   const transactions: Transaction[] = []
   const bankName = isRelay ? 'Relay' : isRevolut ? 'Revolut' : isMercury ? 'Mercury' : 'Imported'
   
-  for (let i = 1; i < lines.length; i++) {
-    const values = parseCSVLine(lines[i])
-    if (values.length < 2) continue
+  // Get column indices based on format
+  if (isRelay) {
+    // Relay format: Date,Payee,Account #,Transaction Type,Description,Reference,Status,Amount,Currency,Balance
+    const dateIdx = headers.indexOf('date')
+    const payeeIdx = headers.indexOf('payee')
+    const txTypeIdx = headers.indexOf('transaction type')
+    const descIdx = headers.indexOf('description')
+    const refIdx = headers.indexOf('reference')
+    const amountIdx = headers.indexOf('amount')
+    const currencyIdx = headers.indexOf('currency')
     
-    // Get amount
-    const amountStr = amountIdx >= 0 ? values[amountIdx] : values[2] || '0'
-    const amount = parseFloat(amountStr.replace(/[^0-9.-]/g, '')) || 0
-    if (amount === 0) continue
-    
-    // Get payee and description
-    const payee = payeeIdx >= 0 ? values[payeeIdx] : ''
-    const rawDesc = descIdx >= 0 ? values[descIdx] : ''
-    const reference = refIdx >= 0 ? values[refIdx] : ''
-    const txType = txTypeIdx >= 0 ? values[txTypeIdx] : ''
-    
-    // Use payee as description for Relay (since Description is always "Unknown")
-    const description = cleanDescription(rawDesc, payee)
-    
-    // Detect category using both payee and description
-    const category = detectCategory(rawDesc, payee)
-    
-    // Detect transaction type
-    let type: 'income' | 'expense' | 'internal' = amount > 0 ? 'income' : 'expense'
-    
-    // Check for internal transfers (only between own bank accounts)
-    // Business Savings, Business Checking = internal accounts
-    // Nutra, Operacional, etc. = external income sources
-    const internalAccounts = /^(business savings|business checking|savings|checking|backup)/i
-    
-    if (isRelay && txType) {
-      const isTxTransfer = txType.toLowerCase().includes('transfer')
-      const isInternalAccount = internalAccounts.test(payee)
+    for (let i = 1; i < lines.length; i++) {
+      const values = parseCSVLine(lines[i])
+      if (values.length < 2) continue
       
-      if (isTxTransfer && isInternalAccount) {
-        // Only mark as internal if it's between own accounts
+      const amountStr = values[amountIdx] || '0'
+      const amount = parseFloat(amountStr.replace(/[^0-9.-]/g, '')) || 0
+      if (amount === 0) continue
+      
+      const payee = values[payeeIdx] || ''
+      const txType = values[txTypeIdx] || ''
+      const rawDesc = values[descIdx] || ''
+      const reference = values[refIdx] || ''
+      
+      // Description: use payee if description is "Unknown"
+      const description = cleanDescription(rawDesc, payee)
+      
+      // Category based on payee
+      const category = detectCategory(rawDesc, payee)
+      
+      // Type based on Transaction Type column
+      let type: 'income' | 'expense' | 'internal'
+      const txTypeLower = txType.toLowerCase()
+      
+      if (txTypeLower === 'spend') {
+        type = 'expense'
+      } else if (txTypeLower === 'receive') {
+        type = 'income'
+      } else if (txTypeLower.includes('transfer')) {
         type = 'internal'
+      } else {
+        type = amount > 0 ? 'income' : 'expense'
       }
-      // Otherwise keep as income/expense based on amount
-    } else if (internalAccounts.test(payee)) {
-      type = 'internal'
+      
+      const date = parseDate(values[dateIdx] || '')
+      const currency = values[currencyIdx] || 'USD'
+      
+      transactions.push({
+        id: `${Date.now()}-${i}-${Math.random().toString(36).substr(2, 6)}`,
+        date,
+        description,
+        reference: reference || rawDesc,
+        bank: bankName,
+        account: currency,
+        type,
+        category,
+        amount,
+        currency
+      })
     }
+  } else if (isRevolut) {
+    // Revolut format: Date started,Date completed,ID,Type,State,Description,Reference,...,Amount,...
+    const dateIdx = headers.findIndex(h => h.includes('date completed') || h.includes('date started'))
+    const typeIdx = headers.indexOf('type')
+    const descIdx = headers.indexOf('description')
+    const amountIdx = headers.indexOf('amount')
+    const currencyIdx = headers.indexOf('payment currency') !== -1 ? headers.indexOf('payment currency') : headers.indexOf('currency')
     
-    // Parse date
-    const dateStr = dateIdx >= 0 ? values[dateIdx] : values[0] || ''
-    const date = parseDate(dateStr)
+    for (let i = 1; i < lines.length; i++) {
+      const values = parseCSVLine(lines[i])
+      if (values.length < 5) continue
+      
+      const amountStr = values[amountIdx] || '0'
+      const amount = parseFloat(amountStr.replace(/[^0-9.-]/g, '')) || 0
+      if (amount === 0) continue
+      
+      const revolut_type = (values[typeIdx] || '').toUpperCase()
+      const rawDesc = values[descIdx] || ''
+      
+      const description = cleanDescription(rawDesc, '')
+      const category = detectCategory(rawDesc, '')
+      
+      // Type based on Revolut transaction type
+      let type: 'income' | 'expense' | 'internal'
+      
+      if (revolut_type === 'CARD_PAYMENT' || revolut_type === 'FEE') {
+        type = 'expense'
+      } else if (revolut_type === 'TOPUP' || revolut_type === 'REFUND' || revolut_type === 'CARD_REFUND') {
+        type = 'income'
+      } else if (revolut_type === 'TRANSFER' || revolut_type === 'EXCHANGE') {
+        type = 'internal'
+      } else {
+        type = amount > 0 ? 'income' : 'expense'
+      }
+      
+      const date = parseDate(values[dateIdx] || '')
+      const currency = values[currencyIdx] || 'USD'
+      
+      transactions.push({
+        id: `${Date.now()}-${i}-${Math.random().toString(36).substr(2, 6)}`,
+        date,
+        description,
+        reference: rawDesc,
+        bank: bankName,
+        account: currency,
+        type,
+        category,
+        amount,
+        currency
+      })
+    }
+  } else {
+    // Generic CSV format
+    let dateIdx = headers.findIndex(h => h.includes('date'))
+    let descIdx = headers.findIndex(h => h.includes('description') || h.includes('memo'))
+    let amountIdx = headers.findIndex(h => h.includes('amount') || h.includes('value'))
+    let currencyIdx = headers.findIndex(h => h.includes('currency'))
     
-    // Get currency
-    const currency = currencyIdx >= 0 ? values[currencyIdx] : 'USD'
-    
-    transactions.push({
-      id: `${Date.now()}-${i}-${Math.random().toString(36).substr(2, 6)}`,
-      date,
-      description,
-      reference: reference || rawDesc,
-      bank: bankName,
-      account: currency,
-      type,
-      category,
-      amount,
-      currency
-    })
+    for (let i = 1; i < lines.length; i++) {
+      const values = parseCSVLine(lines[i])
+      if (values.length < 2) continue
+      
+      const amountStr = values[amountIdx >= 0 ? amountIdx : 2] || '0'
+      const amount = parseFloat(amountStr.replace(/[^0-9.-]/g, '')) || 0
+      if (amount === 0) continue
+      
+      const rawDesc = values[descIdx >= 0 ? descIdx : 1] || ''
+      const description = cleanDescription(rawDesc, '')
+      const category = detectCategory(rawDesc, '')
+      
+      const date = parseDate(values[dateIdx >= 0 ? dateIdx : 0] || '')
+      const currency = values[currencyIdx] || 'USD'
+      
+      transactions.push({
+        id: `${Date.now()}-${i}-${Math.random().toString(36).substr(2, 6)}`,
+        date,
+        description,
+        reference: rawDesc,
+        bank: bankName,
+        account: currency,
+        type: amount > 0 ? 'income' : 'expense',
+        category,
+        amount,
+        currency
+      })
+    }
   }
   
   return transactions
