@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Upload, Calendar, LayoutDashboard, Receipt, Users, ChevronDown, ChevronLeft, ChevronRight, Plus, Pencil, X, FileUp, UserPlus } from 'lucide-react'
 import { createClient } from '@/lib/supabase'
 
@@ -572,29 +572,215 @@ export default function Dashboard() {
         </main>
       </div>
 
-      {/* Upload Modal Placeholder */}
+      {/* Upload Modal */}
       {showUploadModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-md p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold">Upload Statement</h3>
-              <button onClick={() => setShowUploadModal(false)} className="p-2 hover:bg-zinc-800 rounded-lg"><X className="w-5 h-5 text-zinc-400" /></button>
-            </div>
-            <div className="border-2 border-dashed border-zinc-700 rounded-xl p-8 text-center">
-              <FileUp className="w-12 h-12 text-zinc-500 mx-auto mb-4" />
-              <p className="text-zinc-400 mb-2">Drag & drop your bank statement</p>
-              <p className="text-zinc-600 text-sm mb-4">Supports: CSV from Revolut, Relay</p>
-              <button className="bg-zinc-800 hover:bg-zinc-700 text-white font-medium px-4 py-2 rounded-lg">Browse Files</button>
-            </div>
-            <p className="text-zinc-600 text-xs text-center mt-4">Coming soon: automatic parsing</p>
-          </div>
-        </div>
+        <UploadModal onClose={() => setShowUploadModal(false)} onUploadComplete={(txs) => { setTransactions(prev => [...prev, ...txs]); setShowUploadModal(false) }} />
       )}
 
       {/* Add Member Modal */}
       {showAddMemberModal && (
         <AddMemberModal onSave={handleAddMember} onClose={() => setShowAddMemberModal(false)} />
       )}
+    </div>
+  )
+}
+
+// ============================================
+// UPLOAD MODAL
+// ============================================
+function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUploadComplete: (transactions: Transaction[]) => void }) {
+  const [isDragging, setIsDragging] = useState(false)
+  const [file, setFile] = useState<File | null>(null)
+  const [parsing, setParsing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(true)
+  }
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+    const droppedFile = e.dataTransfer.files[0]
+    if (droppedFile && droppedFile.type === 'text/csv') {
+      setFile(droppedFile)
+      setError(null)
+    } else {
+      setError('Please upload a CSV file')
+    }
+  }
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0]
+    if (selectedFile) {
+      setFile(selectedFile)
+      setError(null)
+    }
+  }
+
+  const parseCSV = async () => {
+    if (!file) return
+    setParsing(true)
+    setError(null)
+
+    try {
+      const text = await file.text()
+      const lines = text.split('\n').filter(line => line.trim())
+      const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/"/g, ''))
+      
+      const transactions: Transaction[] = []
+      
+      for (let i = 1; i < lines.length; i++) {
+        const values = lines[i].split(',').map(v => v.trim().replace(/"/g, ''))
+        if (values.length < 3) continue
+
+        // Try to detect bank format
+        const isRevolut = headers.includes('type') && headers.includes('completed date')
+        const isRelay = headers.includes('date') && headers.includes('amount')
+
+        let tx: Transaction | null = null
+
+        if (isRevolut) {
+          // Revolut format
+          const dateIdx = headers.indexOf('completed date') !== -1 ? headers.indexOf('completed date') : headers.indexOf('date')
+          const descIdx = headers.indexOf('description')
+          const amountIdx = headers.indexOf('amount')
+          const currencyIdx = headers.indexOf('currency')
+          
+          const amount = parseFloat(values[amountIdx]) || 0
+          tx = {
+            id: crypto.randomUUID(),
+            date: values[dateIdx] || new Date().toISOString().split('T')[0],
+            description: values[descIdx] || 'Unknown',
+            reference: '',
+            bank: 'Revolut',
+            account: values[currencyIdx] || 'USD',
+            type: amount > 0 ? 'income' : 'expense',
+            category: 'Uncategorized',
+            amount: amount,
+            currency: values[currencyIdx] || 'USD'
+          }
+        } else {
+          // Generic CSV format
+          const dateIdx = headers.findIndex(h => h.includes('date'))
+          const descIdx = headers.findIndex(h => h.includes('description') || h.includes('memo') || h.includes('name'))
+          const amountIdx = headers.findIndex(h => h.includes('amount') || h.includes('value'))
+          
+          const amount = parseFloat(values[amountIdx]) || 0
+          tx = {
+            id: crypto.randomUUID(),
+            date: values[dateIdx] || new Date().toISOString().split('T')[0],
+            description: values[descIdx] || values[1] || 'Unknown',
+            reference: '',
+            bank: 'Imported',
+            account: 'Main',
+            type: amount > 0 ? 'income' : 'expense',
+            category: 'Uncategorized',
+            amount: amount,
+            currency: 'USD'
+          }
+        }
+
+        if (tx && tx.amount !== 0) {
+          transactions.push(tx)
+        }
+      }
+
+      if (transactions.length === 0) {
+        setError('No valid transactions found in file')
+        setParsing(false)
+        return
+      }
+
+      onUploadComplete(transactions)
+    } catch (err) {
+      setError('Error parsing file. Please check the format.')
+      setParsing(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-md">
+        <div className="p-5 border-b border-zinc-800 flex items-center justify-between">
+          <h3 className="text-lg font-semibold">Upload Statement</h3>
+          <button onClick={onClose} className="p-2 hover:bg-zinc-800 rounded-lg"><X className="w-5 h-5 text-zinc-400" /></button>
+        </div>
+        
+        <div className="p-5">
+          {!file ? (
+            <div
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer ${
+                isDragging ? 'border-emerald-500 bg-emerald-500/10' : 'border-zinc-700 hover:border-zinc-600'
+              }`}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv"
+                onChange={handleFileSelect}
+                className="hidden"
+              />
+              <FileUp className={`w-12 h-12 mx-auto mb-4 ${isDragging ? 'text-emerald-400' : 'text-zinc-500'}`} />
+              <p className="text-zinc-400 mb-2">Drag & drop your bank statement</p>
+              <p className="text-zinc-600 text-sm mb-4">Supports: CSV from Revolut, Relay, or generic format</p>
+              <button 
+                type="button"
+                className="bg-zinc-800 hover:bg-zinc-700 text-white font-medium px-4 py-2 rounded-lg transition-colors"
+              >
+                Browse Files
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3 p-4 bg-zinc-800 rounded-xl">
+                <div className="w-10 h-10 rounded-lg bg-emerald-500/20 flex items-center justify-center">
+                  <FileUp className="w-5 h-5 text-emerald-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium truncate">{file.name}</p>
+                  <p className="text-zinc-500 text-sm">{(file.size / 1024).toFixed(1)} KB</p>
+                </div>
+                <button onClick={() => setFile(null)} className="p-2 hover:bg-zinc-700 rounded-lg">
+                  <X className="w-4 h-4 text-zinc-400" />
+                </button>
+              </div>
+
+              {error && (
+                <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+                  {error}
+                </div>
+              )}
+
+              <button
+                onClick={parseCSV}
+                disabled={parsing}
+                className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 disabled:bg-zinc-700 text-black font-semibold rounded-xl transition-colors flex items-center justify-center gap-2"
+              >
+                {parsing ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />
+                    Processing...
+                  </>
+                ) : (
+                  'Import Transactions'
+                )}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
