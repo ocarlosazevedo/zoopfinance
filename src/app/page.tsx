@@ -707,38 +707,53 @@ export default function Dashboard() {
 // LOCAL CSV PARSER - INSTANTÂNEO
 // ============================================
 const categoryRules: { pattern: RegExp; category: string }[] = [
+  // Advertising - PRIORITY (most common for you)
+  { pattern: /facebook|meta ads|meta_ads|fb ads/i, category: 'Ads' },
+  { pattern: /google ads|googleads|dl\*google|dL\*google/i, category: 'Ads' },
+  { pattern: /tiktok|snapchat|pinterest ads|twitter ads|linkedin ads/i, category: 'Ads' },
   // Sales / Revenue
   { pattern: /shopify|stripe payout|paypal payout|amazon payout|etsy|ebay deposit/i, category: 'Sales' },
-  // Advertising
-  { pattern: /facebook|meta ads|google ads|tiktok|snapchat|pinterest ads|advertising/i, category: 'Ads' },
+  { pattern: /nutra|revenue|sales|payout|deposit from/i, category: 'Sales' },
   // Software / SaaS
-  { pattern: /notion|slack|zoom|github|vercel|aws|google cloud|heroku|digitalocean|openai|anthropic|zapier|airtable|figma|canva|adobe|microsoft|dropbox|1password/i, category: 'Software' },
+  { pattern: /notion|slack|zoom|github|vercel|aws|google cloud|heroku|digitalocean/i, category: 'Software' },
+  { pattern: /openai|anthropic|zapier|airtable|figma|canva|adobe|microsoft|dropbox|1password/i, category: 'Software' },
+  { pattern: /stape|tracking|pixel|analytics/i, category: 'Software' },
+  { pattern: /pagouai|pagou ai/i, category: 'Software' },
   // Payroll
-  { pattern: /payroll|salary|gusto|deel|remote\.com|wise transfer|contractor/i, category: 'Payroll' },
+  { pattern: /payroll|salary|gusto|deel|remote\.com|wise transfer|contractor|employee/i, category: 'Payroll' },
   // Shipping / Logistics
   { pattern: /fedex|ups|usps|dhl|shipstation|shippo|easypost|fulfillment|shipping|postage/i, category: 'Shipping' },
   // Fees
   { pattern: /fee|charge|interest|penalty|overdraft|wire fee|monthly service/i, category: 'Fees' },
-  // Transfers
-  { pattern: /transfer|ach|wire|internal|between accounts/i, category: 'Transfer' },
+  // Transfers - Internal
+  { pattern: /transfer|ach|wire|internal|between accounts|savings|checking|backup|operacional/i, category: 'Transfer' },
   // Refunds
   { pattern: /refund|chargeback|dispute|reversal|return/i, category: 'Refunds' },
 ]
 
-function detectCategory(description: string): string {
-  const desc = description.toLowerCase()
+function detectCategory(description: string, payee?: string): string {
+  // Check payee first (more reliable for Relay)
+  const textToCheck = `${payee || ''} ${description || ''}`.toLowerCase()
+  
   for (const rule of categoryRules) {
-    if (rule.pattern.test(desc)) {
+    if (rule.pattern.test(textToCheck)) {
       return rule.category
     }
   }
   return 'Other'
 }
 
-function cleanDescription(desc: string): string {
-  if (!desc) return 'Transaction'
+function cleanDescription(desc: string, payee?: string): string {
+  // For Relay: use Payee as main description if Description is "Unknown"
+  let text = desc
+  if (!desc || desc.toLowerCase() === 'unknown' || desc.trim() === '') {
+    text = payee || 'Transaction'
+  }
+  
+  if (!text) return 'Transaction'
+  
   // Remove ALL CAPS, clean up
-  let cleaned = desc.trim()
+  let cleaned = text.trim()
   if (cleaned === cleaned.toUpperCase() && cleaned.length > 3) {
     cleaned = cleaned.toLowerCase().replace(/\b\w/g, c => c.toUpperCase())
   }
@@ -755,54 +770,97 @@ function parseCSVLocally(csvContent: string, fileName: string): Transaction[] {
   const headerLine = lines[0]
   const headers = parseCSVLine(headerLine).map(h => h.toLowerCase().trim())
   
+  console.log('CSV Headers:', headers) // Debug
+  
   // Detect bank format
+  const isRelay = headers.includes('payee') && headers.includes('transaction type')
   const isRevolut = headers.includes('type') && (headers.includes('completed date') || headers.includes('started date'))
-  const isRelay = headers.some(h => h.includes('date')) && headers.some(h => h.includes('amount')) && fileName.toLowerCase().includes('relay')
-  const isMercury = headers.includes('date') && headers.includes('amount') && headers.includes('bank description')
+  const isMercury = headers.includes('bank description')
   
-  // Find column indices
-  let dateIdx = headers.findIndex(h => h.includes('completed date') || h === 'date' || h.includes('posted'))
-  if (dateIdx === -1) dateIdx = headers.findIndex(h => h.includes('date'))
+  // Find column indices based on format
+  let dateIdx: number, descIdx: number, amountIdx: number, currencyIdx: number, payeeIdx: number, txTypeIdx: number, refIdx: number
   
-  let descIdx = headers.findIndex(h => h === 'description' || h === 'bank description' || h.includes('memo'))
-  if (descIdx === -1) descIdx = headers.findIndex(h => h.includes('name') || h.includes('description'))
-  
-  let amountIdx = headers.findIndex(h => h === 'amount' || h === 'value')
-  if (amountIdx === -1) amountIdx = headers.findIndex(h => h.includes('amount'))
-  
-  const currencyIdx = headers.findIndex(h => h === 'currency')
+  if (isRelay) {
+    // Relay format: Date,Payee,Account #,Transaction Type,Description,Reference,Status,Amount,Currency,Balance
+    dateIdx = headers.indexOf('date')
+    payeeIdx = headers.indexOf('payee')
+    descIdx = headers.indexOf('description')
+    amountIdx = headers.indexOf('amount')
+    currencyIdx = headers.indexOf('currency')
+    txTypeIdx = headers.indexOf('transaction type')
+    refIdx = headers.indexOf('reference')
+  } else if (isRevolut) {
+    // Revolut format
+    dateIdx = headers.indexOf('completed date')
+    if (dateIdx === -1) dateIdx = headers.indexOf('started date')
+    descIdx = headers.indexOf('description')
+    amountIdx = headers.indexOf('amount')
+    currencyIdx = headers.indexOf('currency')
+    payeeIdx = -1
+    txTypeIdx = headers.indexOf('type')
+    refIdx = -1
+  } else {
+    // Generic format
+    dateIdx = headers.findIndex(h => h.includes('date'))
+    descIdx = headers.findIndex(h => h.includes('description') || h.includes('memo'))
+    amountIdx = headers.findIndex(h => h.includes('amount') || h.includes('value'))
+    currencyIdx = headers.findIndex(h => h.includes('currency'))
+    payeeIdx = headers.findIndex(h => h.includes('payee') || h.includes('name') || h.includes('merchant'))
+    txTypeIdx = -1
+    refIdx = -1
+  }
   
   const transactions: Transaction[] = []
-  const bankName = isRevolut ? 'Revolut' : isRelay ? 'Relay' : isMercury ? 'Mercury' : 'Imported'
+  const bankName = isRelay ? 'Relay' : isRevolut ? 'Revolut' : isMercury ? 'Mercury' : 'Imported'
   
   for (let i = 1; i < lines.length; i++) {
     const values = parseCSVLine(lines[i])
     if (values.length < 2) continue
     
-    const amountStr = values[amountIdx] || values[2] || '0'
+    // Get amount
+    const amountStr = amountIdx >= 0 ? values[amountIdx] : values[2] || '0'
     const amount = parseFloat(amountStr.replace(/[^0-9.-]/g, '')) || 0
     if (amount === 0) continue
     
-    const rawDesc = values[descIdx] || values[1] || ''
-    const description = cleanDescription(rawDesc)
-    const category = detectCategory(rawDesc)
+    // Get payee and description
+    const payee = payeeIdx >= 0 ? values[payeeIdx] : ''
+    const rawDesc = descIdx >= 0 ? values[descIdx] : ''
+    const reference = refIdx >= 0 ? values[refIdx] : ''
+    const txType = txTypeIdx >= 0 ? values[txTypeIdx] : ''
     
-    // Detect internal transfers
-    const isInternal = /transfer|between accounts|internal/i.test(rawDesc) && Math.abs(amount) > 100
+    // Use payee as description for Relay (since Description is always "Unknown")
+    const description = cleanDescription(rawDesc, payee)
     
-    const dateStr = values[dateIdx] || values[0] || ''
+    // Detect category using both payee and description
+    const category = detectCategory(rawDesc, payee)
+    
+    // Detect transaction type
+    let type: 'income' | 'expense' | 'internal' = amount > 0 ? 'income' : 'expense'
+    
+    // Check for internal transfers
+    if (isRelay && txType) {
+      if (txType.toLowerCase().includes('transfer')) {
+        type = 'internal'
+      }
+    } else if (/transfer|between accounts|internal|savings|checking/i.test(`${payee} ${rawDesc} ${reference}`)) {
+      type = 'internal'
+    }
+    
+    // Parse date
+    const dateStr = dateIdx >= 0 ? values[dateIdx] : values[0] || ''
     const date = parseDate(dateStr)
     
-    const currency = values[currencyIdx] || 'USD'
+    // Get currency
+    const currency = currencyIdx >= 0 ? values[currencyIdx] : 'USD'
     
     transactions.push({
       id: `${Date.now()}-${i}-${Math.random().toString(36).substr(2, 6)}`,
       date,
       description,
-      reference: rawDesc,
+      reference: reference || rawDesc,
       bank: bankName,
       account: currency,
-      type: isInternal ? 'internal' : (amount > 0 ? 'income' : 'expense'),
+      type,
       category,
       amount,
       currency
