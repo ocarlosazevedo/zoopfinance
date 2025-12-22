@@ -25,8 +25,10 @@ type Transaction = {
   account: string
   type: 'income' | 'expense' | 'internal'
   category: string
-  amount: number
-  currency: string
+  amount: number           // Always in USD
+  currency: string         // Always USD (display currency)
+  originalAmount?: number  // Original amount before conversion
+  originalCurrency?: string // Original currency (EUR, GBP, BRL, etc)
   period?: string
 }
 
@@ -57,6 +59,55 @@ const currentYear = new Date().getFullYear()
 // ============================================
 const formatCurrency = (value: number, currency = 'USD') => 
   new Intl.NumberFormat('en-US', { style: 'currency', currency, minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(Math.abs(value))
+
+// Exchange rates cache
+let exchangeRatesCache: { rates: Record<string, number>; timestamp: number } | null = null
+const CACHE_DURATION = 1000 * 60 * 60 // 1 hour
+
+async function getExchangeRates(): Promise<Record<string, number>> {
+  // Return cached rates if fresh
+  if (exchangeRatesCache && Date.now() - exchangeRatesCache.timestamp < CACHE_DURATION) {
+    return exchangeRatesCache.rates
+  }
+  
+  try {
+    // Free API - rates relative to USD
+    const response = await fetch('https://api.exchangerate-api.com/v4/latest/USD')
+    const data = await response.json()
+    
+    // Cache the rates
+    exchangeRatesCache = {
+      rates: data.rates,
+      timestamp: Date.now()
+    }
+    
+    return data.rates
+  } catch (error) {
+    console.error('Error fetching exchange rates:', error)
+    // Fallback rates if API fails
+    return {
+      USD: 1,
+      EUR: 0.92,
+      GBP: 0.79,
+      BRL: 6.10,
+      CAD: 1.44,
+      AUD: 1.60,
+    }
+  }
+}
+
+function convertToUSD(amount: number, fromCurrency: string, rates: Record<string, number>): number {
+  if (fromCurrency === 'USD' || !fromCurrency) return amount
+  
+  const rate = rates[fromCurrency]
+  if (!rate) {
+    console.warn(`Unknown currency: ${fromCurrency}, keeping original amount`)
+    return amount
+  }
+  
+  // rates are relative to USD, so divide to convert to USD
+  return amount / rate
+}
 
 const roleColors: Record<string, string> = {
   'Developer': '#3b82f6',
@@ -301,9 +352,16 @@ function OverviewTab({ data, transactions, onUpload }: { data: { income: number;
                 <p className="font-medium">{tx.description}</p>
                 <p className="text-zinc-500 text-xs">{tx.bank} • {tx.date}</p>
               </div>
-              <span className={`font-semibold ${tx.type === 'income' ? 'text-emerald-400' : 'text-red-400'}`}>
-                {tx.type === 'income' ? '+' : '-'}{formatCurrency(Math.abs(tx.amount), tx.currency)}
-              </span>
+              <div className="text-right">
+                <span className={`font-semibold ${tx.type === 'income' ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {tx.type === 'income' ? '+' : '-'}{formatCurrency(Math.abs(tx.amount))}
+                </span>
+                {tx.originalCurrency && (
+                  <p className="text-zinc-500 text-xs">
+                    {tx.originalAmount && tx.originalAmount < 0 ? '' : ''}{new Intl.NumberFormat('en-US', { style: 'currency', currency: tx.originalCurrency, minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(Math.abs(tx.originalAmount || 0))}
+                  </p>
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -592,17 +650,37 @@ export default function Dashboard() {
   const loadData = async () => {
     setLoading(true)
     try {
-      // Load transactions (Supabase default is 1000, so we need to increase)
-      const { data: txData, error: txError } = await supabase
-        .from('transactions')
-        .select('*')
-        .order('date', { ascending: false })
-        .limit(10000)
+      // Load ALL transactions with pagination
+      let allTransactions: any[] = []
+      const pageSize = 500
+      let from = 0
+      let keepGoing = true
       
-      if (txError) {
-        console.error('Error loading transactions:', txError)
-      } else if (txData) {
-        setTransactions((txData as any[]).map(tx => ({
+      while (keepGoing) {
+        const to = from + pageSize - 1
+        const { data: txData, error: txError } = await supabase
+          .from('transactions')
+          .select('*')
+          .order('date', { ascending: false })
+          .range(from, to)
+        
+        if (txError) {
+          console.error('Error loading transactions page:', txError)
+          keepGoing = false
+        } else if (txData && txData.length > 0) {
+          allTransactions = [...allTransactions, ...txData]
+          from += pageSize
+          // Continue if we got a full page
+          keepGoing = txData.length === pageSize
+        } else {
+          keepGoing = false
+        }
+      }
+      
+      console.log(`Loaded ${allTransactions.length} transactions total`)
+      
+      if (allTransactions.length > 0) {
+        setTransactions(allTransactions.map(tx => ({
           id: tx.id,
           date: tx.date,
           description: tx.description,
@@ -613,6 +691,8 @@ export default function Dashboard() {
           category: tx.category || 'Other',
           amount: parseFloat(tx.amount),
           currency: tx.currency || 'USD',
+          originalAmount: tx.original_amount ? parseFloat(tx.original_amount) : undefined,
+          originalCurrency: tx.original_currency || undefined,
           period: tx.period
         })))
       }
@@ -677,6 +757,8 @@ export default function Dashboard() {
         category: tx.category,
         amount: tx.amount,
         currency: tx.currency,
+        original_amount: tx.originalAmount || null,
+        original_currency: tx.originalCurrency || null,
         period: tx.period || period
       }))
 
@@ -995,7 +1077,7 @@ function cleanDescription(desc: string, payee?: string): string {
 // Conta do Relay para marcar como internal automaticamente
 const RELAY_ACCOUNT = '200000805781'
 
-function parseCSVLocally(csvContent: string, fileName: string, teamMembers: TeamMember[] = []): Transaction[] {
+function parseCSVLocally(csvContent: string, fileName: string, teamMembers: TeamMember[] = [], exchangeRates: Record<string, number> = {}): Transaction[] {
   const lines = csvContent.split('\n').filter(line => line.trim())
   if (lines.length < 2) return []
   
@@ -1058,7 +1140,10 @@ function parseCSVLocally(csvContent: string, fileName: string, teamMembers: Team
       }
       
       const date = parseDate(values[dateIdx] || '')
-      const currency = values[currencyIdx] || 'USD'
+      const originalCurrency = values[currencyIdx] || 'USD'
+      
+      // Convert to USD
+      const amountInUSD = convertToUSD(amount, originalCurrency, exchangeRates)
       
       transactions.push({
         id: `${Date.now()}-${i}-${Math.random().toString(36).substr(2, 6)}`,
@@ -1066,11 +1151,13 @@ function parseCSVLocally(csvContent: string, fileName: string, teamMembers: Team
         description,
         reference: reference || rawDesc,
         bank: bankName,
-        account: currency,
+        account: originalCurrency,
         type,
         category,
-        amount,
-        currency
+        amount: amountInUSD,
+        currency: 'USD',
+        originalAmount: originalCurrency !== 'USD' ? amount : undefined,
+        originalCurrency: originalCurrency !== 'USD' ? originalCurrency : undefined
       })
     }
   } else if (isRevolut) {
@@ -1143,7 +1230,10 @@ function parseCSVLocally(csvContent: string, fileName: string, teamMembers: Team
       }
       
       const date = parseDate(values[dateIdx] || '')
-      const currency = values[currencyIdx] || 'USD'
+      const originalCurrency = values[currencyIdx] || 'USD'
+      
+      // Convert to USD
+      const amountInUSD = convertToUSD(amount, originalCurrency, exchangeRates)
       
       transactions.push({
         id: `${Date.now()}-${i}-${Math.random().toString(36).substr(2, 6)}`,
@@ -1151,11 +1241,13 @@ function parseCSVLocally(csvContent: string, fileName: string, teamMembers: Team
         description,
         reference: rawDesc,
         bank: bankName,
-        account: currency,
+        account: originalCurrency,
         type,
         category,
-        amount,
-        currency
+        amount: amountInUSD,
+        currency: 'USD',
+        originalAmount: originalCurrency !== 'USD' ? amount : undefined,
+        originalCurrency: originalCurrency !== 'USD' ? originalCurrency : undefined
       })
     }
   } else {
@@ -1178,7 +1270,10 @@ function parseCSVLocally(csvContent: string, fileName: string, teamMembers: Team
       const category = detectCategory(rawDesc, '')
       
       const date = parseDate(values[dateIdx >= 0 ? dateIdx : 0] || '')
-      const currency = values[currencyIdx] || 'USD'
+      const originalCurrency = values[currencyIdx] || 'USD'
+      
+      // Convert to USD
+      const amountInUSD = convertToUSD(amount, originalCurrency, exchangeRates)
       
       transactions.push({
         id: `${Date.now()}-${i}-${Math.random().toString(36).substr(2, 6)}`,
@@ -1186,11 +1281,13 @@ function parseCSVLocally(csvContent: string, fileName: string, teamMembers: Team
         description,
         reference: rawDesc,
         bank: bankName,
-        account: currency,
+        account: originalCurrency,
         type: amount > 0 ? 'income' : 'expense',
         category,
-        amount,
-        currency
+        amount: amountInUSD,
+        currency: 'USD',
+        originalAmount: originalCurrency !== 'USD' ? amount : undefined,
+        originalCurrency: originalCurrency !== 'USD' ? originalCurrency : undefined
       })
     }
   }
@@ -1318,10 +1415,14 @@ function UploadModal({ onClose, onUploadComplete, teamMembers }: { onClose: () =
     const allTransactions: Transaction[] = []
 
     try {
+      // Fetch exchange rates first
+      const exchangeRates = await getExchangeRates()
+      console.log('Exchange rates loaded:', Object.keys(exchangeRates).length, 'currencies')
+      
       // Process all files locally - INSTANT
       for (const file of files) {
         const csvContent = await file.text()
-        const transactions = parseCSVLocally(csvContent, file.name, teamMembers)
+        const transactions = parseCSVLocally(csvContent, file.name, teamMembers, exchangeRates)
         
         // Add period to each transaction
         transactions.forEach(tx => {
@@ -1337,7 +1438,7 @@ function UploadModal({ onClose, onUploadComplete, teamMembers }: { onClose: () =
         return
       }
 
-      // Calculate summary
+      // Calculate summary (all amounts now in USD)
       const income = allTransactions.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0)
       const expenses = allTransactions.filter(t => t.type === 'expense').reduce((s, t) => s + Math.abs(t.amount), 0)
       
