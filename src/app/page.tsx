@@ -430,11 +430,47 @@ function EmptyState({ icon: Icon, title, description, action, actionLabel }: { i
 }
 
 // ============================================
+// LOADING SKELETON COMPONENT
+// ============================================
+function LoadingSkeleton() {
+  return (
+    <div className="space-y-6 animate-pulse">
+      {/* Cards skeleton */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {[1, 2, 3, 4].map(i => (
+          <div key={i} className="bg-zinc-800/50 border border-zinc-700 rounded-xl p-4">
+            <div className="h-4 bg-zinc-700 rounded w-20 mb-2" />
+            <div className="h-8 bg-zinc-700 rounded w-28" />
+          </div>
+        ))}
+      </div>
+      {/* Table skeleton */}
+      <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl p-4">
+        <div className="space-y-4">
+          {[1, 2, 3, 4, 5].map(i => (
+            <div key={i} className="flex items-center gap-4">
+              <div className="h-4 bg-zinc-700 rounded w-20" />
+              <div className="h-4 bg-zinc-700 rounded flex-1" />
+              <div className="h-4 bg-zinc-700 rounded w-24" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ============================================
 // OVERVIEW TAB
 // ============================================
-function OverviewTab({ data, transactions, onUpload }: { data: { income: number; expenses: number; profit: number }; transactions: Transaction[]; onUpload: () => void }) {
+function OverviewTab({ data, transactions, onUpload, loading }: { data: { income: number; expenses: number; profit: number }; transactions: Transaction[]; onUpload: () => void; loading: boolean }) {
   const margin = data.income > 0 ? ((data.profit / data.income) * 100).toFixed(1) : '0'
   const hasData = data.income > 0 || data.expenses > 0
+
+  // Show skeleton while loading
+  if (loading) {
+    return <LoadingSkeleton />
+  }
 
   if (!hasData) {
     return (
@@ -566,11 +602,12 @@ function OverviewTab({ data, transactions, onUpload }: { data: { income: number;
 // ============================================
 // TRANSACTIONS TAB
 // ============================================
-function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths }: { 
+function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths, loading }: { 
   transactions: Transaction[]
   onUpload: () => void
   selectedYear: number
   selectedMonths: number[]
+  loading: boolean
 }) {
   const [filterType, setFilterType] = useState('all')
   const [filterCategory, setFilterCategory] = useState('all')
@@ -682,6 +719,11 @@ function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths 
       return `${monthNamesShort[currentMonth]} ${filterDateFrom}-${filterDateTo}`
     }
     return 'All Dates'
+  }
+
+  // Show skeleton while loading
+  if (loading) {
+    return <LoadingSkeleton />
   }
 
   if (transactions.length === 0) {
@@ -1090,13 +1132,18 @@ function TransactionDetailModal({ transaction: tx, onClose }: { transaction: Tra
 // ============================================
 // PAYROLL TAB
 // ============================================
-function PayrollTab({ teamMembers, currentMonth, onUpdateVariable, onAddMember }: { teamMembers: TeamMember[]; currentMonth: string; onUpdateVariable: (id: string, variable: number, note: string) => void; onAddMember: () => void }) {
+function PayrollTab({ teamMembers, currentMonth, onUpdateVariable, onAddMember, loading }: { teamMembers: TeamMember[]; currentMonth: string; onUpdateVariable: (id: string, variable: number, note: string) => void; onAddMember: () => void; loading: boolean }) {
   const [editingMember, setEditingMember] = useState<TeamMember | null>(null)
 
   const totals = teamMembers.reduce((acc, m) => {
     const comp = m.compensation[currentMonth] || { variable: 0 }
     return { base: acc.base + m.baseSalary, variable: acc.variable + comp.variable, total: acc.total + m.baseSalary + comp.variable }
   }, { base: 0, variable: 0, total: 0 })
+
+  // Show skeleton while loading
+  if (loading) {
+    return <LoadingSkeleton />
+  }
 
   if (teamMembers.length === 0) {
     return (
@@ -1609,9 +1656,9 @@ export default function Dashboard() {
               ))}
             </div>
           </div>
-          {activeTab === 'overview' && <OverviewTab data={aggregatedData} transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} />}
-          {activeTab === 'transactions' && <TransactionsTab transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} selectedYear={selectedYear} selectedMonths={selectedMonths} />}
-          {activeTab === 'payroll' && <PayrollTab teamMembers={teamMembers} currentMonth={getPayrollMonth()} onUpdateVariable={handleUpdateVariable} onAddMember={() => setShowAddMemberModal(true)} />}
+          {activeTab === 'overview' && <OverviewTab data={aggregatedData} transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} loading={loading} />}
+          {activeTab === 'transactions' && <TransactionsTab transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} selectedYear={selectedYear} selectedMonths={selectedMonths} loading={loading} />}
+          {activeTab === 'payroll' && <PayrollTab teamMembers={teamMembers} currentMonth={getPayrollMonth()} onUpdateVariable={handleUpdateVariable} onAddMember={() => setShowAddMemberModal(true)} loading={loading} />}
         </main>
       </div>
 
