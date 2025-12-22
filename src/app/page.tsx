@@ -570,12 +570,184 @@ export default function Dashboard() {
   const [selectedMonths, setSelectedMonths] = useState<number[]>([currentMonthIndex])
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
+  const [statements, setStatements] = useState<{ id: string; filename: string; bank: string; period: string; transactions_count: number; created_at: string }[]>([])
   const [showUploadModal, setShowUploadModal] = useState(false)
   const [showAddMemberModal, setShowAddMemberModal] = useState(false)
+  const [showManageDataModal, setShowManageDataModal] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+
+  const supabase = createClient()
 
   // Month names
   const monthNamesShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
   const currentMonthStr = `${monthNamesShort[currentMonthIndex]} ${currentYear}`
+
+  // Load data from Supabase on mount
+  useEffect(() => {
+    loadData()
+  }, [])
+
+  const loadData = async () => {
+    setLoading(true)
+    try {
+      // Load transactions
+      const { data: txData, error: txError } = await supabase
+        .from('transactions')
+        .select('*')
+        .order('date', { ascending: false })
+      
+      if (txError) {
+        console.error('Error loading transactions:', txError)
+      } else if (txData) {
+        setTransactions((txData as any[]).map(tx => ({
+          id: tx.id,
+          date: tx.date,
+          description: tx.description,
+          reference: tx.reference || '',
+          bank: tx.bank,
+          account: tx.account || '',
+          type: tx.type as 'income' | 'expense' | 'internal',
+          category: tx.category || 'Other',
+          amount: parseFloat(tx.amount),
+          currency: tx.currency || 'USD',
+          period: tx.period
+        })))
+      }
+
+      // Load statements
+      const { data: stmtData, error: stmtError } = await supabase
+        .from('statements')
+        .select('*')
+        .order('created_at', { ascending: false })
+      
+      if (stmtError) {
+        console.error('Error loading statements:', stmtError)
+      } else if (stmtData) {
+        setStatements(stmtData as any[])
+      }
+
+      // Load team members
+      const { data: teamData, error: teamError } = await supabase
+        .from('team_members')
+        .select('*')
+      
+      if (!teamError && teamData) {
+        // Load compensation for each member
+        const { data: compData } = await supabase.from('compensation').select('*')
+        
+        setTeamMembers((teamData as any[]).map(m => {
+          const memberComp = (compData as any[] || []).filter(c => c.member_id === m.id)
+          const compensation: Record<string, { variable: number; note: string }> = {}
+          memberComp.forEach(c => {
+            compensation[c.period] = { variable: parseFloat(c.variable_amount), note: c.note || '' }
+          })
+          return {
+            id: m.id,
+            name: m.name,
+            role: m.role,
+            baseSalary: parseFloat(m.base_salary),
+            compensation
+          }
+        }))
+      }
+    } catch (err) {
+      console.error('Error loading data:', err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Save transactions to Supabase
+  const saveTransactions = async (newTransactions: Transaction[], period: string, filename: string, bank: string) => {
+    setSaving(true)
+    try {
+      // Insert transactions
+      const txToInsert = newTransactions.map(tx => ({
+        id: tx.id,
+        date: tx.date,
+        description: tx.description,
+        reference: tx.reference,
+        bank: tx.bank,
+        account: tx.account,
+        type: tx.type,
+        category: tx.category,
+        amount: tx.amount,
+        currency: tx.currency,
+        period: tx.period || period
+      }))
+
+      const { error: txError } = await supabase
+        .from('transactions')
+        .insert(txToInsert as any)
+
+      if (txError) {
+        console.error('Error saving transactions:', txError)
+        throw txError
+      }
+
+      // Record the statement
+      const { error: stmtError } = await supabase
+        .from('statements')
+        .insert({
+          filename,
+          bank,
+          period,
+          transactions_count: newTransactions.length
+        } as any)
+
+      if (stmtError) {
+        console.error('Error saving statement:', stmtError)
+      }
+
+      // Reload data
+      await loadData()
+      return true
+    } catch (err) {
+      console.error('Error saving:', err)
+      return false
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Delete transactions by period
+  const deleteByPeriod = async (period: string) => {
+    try {
+      const { error: txError } = await supabase
+        .from('transactions')
+        .delete()
+        .eq('period', period)
+
+      if (txError) throw txError
+
+      const { error: stmtError } = await supabase
+        .from('statements')
+        .delete()
+        .eq('period', period)
+
+      if (stmtError) throw stmtError
+
+      await loadData()
+      return true
+    } catch (err) {
+      console.error('Error deleting:', err)
+      return false
+    }
+  }
+
+  // Delete all data
+  const deleteAllData = async () => {
+    try {
+      await supabase.from('transactions').delete().neq('id', '')
+      await supabase.from('statements').delete().neq('id', '')
+      await loadData()
+      return true
+    } catch (err) {
+      console.error('Error deleting all:', err)
+      return false
+    }
+  }
 
   // Filter transactions by selected period
   const filteredTransactions = transactions.filter(tx => {
@@ -651,8 +823,20 @@ export default function Dashboard() {
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center font-bold text-xl">Z</div>
               <span className="text-xl font-bold">Zoop Finance</span>
+              {(loading || saving) && (
+                <div className="flex items-center gap-2 text-zinc-500 text-sm">
+                  <div className="w-4 h-4 border-2 border-zinc-600 border-t-emerald-500 rounded-full animate-spin" />
+                  {saving ? 'Saving...' : 'Loading...'}
+                </div>
+              )}
             </div>
             <div className="flex items-center gap-3">
+              <button 
+                onClick={() => setShowManageDataModal(true)} 
+                className="text-zinc-400 hover:text-white px-3 py-2 rounded-lg hover:bg-zinc-800 transition-colors text-sm"
+              >
+                Manage Data
+              </button>
               <PeriodSelector selectedYear={selectedYear} setSelectedYear={setSelectedYear} selectedMonths={selectedMonths} setSelectedMonths={setSelectedMonths} />
               <button onClick={() => setShowUploadModal(true)} className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-black font-medium px-4 py-2.5 rounded-xl transition-colors">
                 <Upload className="w-5 h-5" />Upload
@@ -687,12 +871,32 @@ export default function Dashboard() {
 
       {/* Upload Modal */}
       {showUploadModal && (
-        <UploadModal onClose={() => setShowUploadModal(false)} onUploadComplete={(txs, period) => { 
-          // Add period to each transaction
-          const txsWithPeriod = txs.map(tx => ({ ...tx, period }))
-          setTransactions(prev => [...prev, ...txsWithPeriod])
-          setShowUploadModal(false) 
-        }} />
+        <UploadModal 
+          onClose={() => setShowUploadModal(false)} 
+          onUploadComplete={async (txs, period, files) => { 
+            // Add period to each transaction
+            const txsWithPeriod = txs.map(tx => ({ ...tx, period }))
+            
+            // Save to Supabase
+            const filename = files.map(f => f.name).join(', ')
+            const bank = txs[0]?.bank || 'Imported'
+            const success = await saveTransactions(txsWithPeriod, period, filename, bank)
+            
+            if (success) {
+              setShowUploadModal(false) 
+            }
+          }} 
+        />
+      )}
+
+      {/* Manage Data Modal */}
+      {showManageDataModal && (
+        <ManageDataModal 
+          statements={statements}
+          onDeletePeriod={deleteByPeriod}
+          onDeleteAll={deleteAllData}
+          onClose={() => setShowManageDataModal(false)}
+        />
       )}
 
       {/* Add Member Modal */}
@@ -992,7 +1196,7 @@ function parseDate(dateStr: string): string {
 // ============================================
 // UPLOAD MODAL - INSTANTÂNEO
 // ============================================
-function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUploadComplete: (transactions: Transaction[], period: string) => void }) {
+function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUploadComplete: (transactions: Transaction[], period: string, files: File[]) => void }) {
   const [isDragging, setIsDragging] = useState(false)
   const [files, setFiles] = useState<File[]>([])
   const [processing, setProcessing] = useState(false)
@@ -1101,7 +1305,7 @@ function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUpl
   const confirmImport = () => {
     if (analysisResult) {
       const period = `${monthNamesShort[selectedMonth]} ${selectedYear}`
-      onUploadComplete(analysisResult.transactions, period)
+      onUploadComplete(analysisResult.transactions, period, files)
     }
   }
 
@@ -1300,6 +1504,150 @@ function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUpl
 // ============================================
 // ADD MEMBER MODAL
 // ============================================
+// ============================================
+// MANAGE DATA MODAL
+// ============================================
+function ManageDataModal({ 
+  statements, 
+  onDeletePeriod, 
+  onDeleteAll, 
+  onClose 
+}: { 
+  statements: { id: string; filename: string; bank: string; period: string; transactions_count: number; created_at: string }[]
+  onDeletePeriod: (period: string) => Promise<boolean>
+  onDeleteAll: () => Promise<boolean>
+  onClose: () => void 
+}) {
+  const [deleting, setDeleting] = useState<string | null>(null)
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false)
+
+  // Group statements by period
+  const byPeriod = statements.reduce((acc, stmt) => {
+    if (!acc[stmt.period]) acc[stmt.period] = []
+    acc[stmt.period].push(stmt)
+    return acc
+  }, {} as Record<string, typeof statements>)
+
+  const periods = Object.keys(byPeriod).sort((a, b) => {
+    // Sort by date descending
+    const [aMonth, aYear] = a.split(' ')
+    const [bMonth, bYear] = b.split(' ')
+    const monthOrder = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    return (parseInt(bYear) - parseInt(aYear)) || (monthOrder.indexOf(bMonth) - monthOrder.indexOf(aMonth))
+  })
+
+  const handleDeletePeriod = async (period: string) => {
+    setDeleting(period)
+    await onDeletePeriod(period)
+    setDeleting(null)
+  }
+
+  const handleDeleteAll = async () => {
+    setDeleting('all')
+    await onDeleteAll()
+    setDeleting(null)
+    setConfirmDeleteAll(false)
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="p-5 border-b border-zinc-800 flex items-center justify-between sticky top-0 bg-zinc-900 z-10">
+          <div>
+            <h3 className="text-lg font-semibold">Manage Data</h3>
+            <p className="text-zinc-500 text-sm">View and delete imported statements</p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-zinc-800 rounded-lg">
+            <X className="w-5 h-5 text-zinc-400" />
+          </button>
+        </div>
+        
+        <div className="p-5 space-y-4">
+          {periods.length === 0 ? (
+            <div className="text-center py-8 text-zinc-500">
+              <Receipt className="w-12 h-12 mx-auto mb-3 opacity-50" />
+              <p>No data imported yet</p>
+            </div>
+          ) : (
+            <>
+              {/* Periods list */}
+              <div className="space-y-3">
+                {periods.map(period => {
+                  const stmts = byPeriod[period]
+                  const totalTx = stmts.reduce((sum, s) => sum + s.transactions_count, 0)
+                  
+                  return (
+                    <div key={period} className="p-4 bg-zinc-800/50 border border-zinc-700 rounded-xl">
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="font-semibold">{period}</h4>
+                        <button
+                          onClick={() => handleDeletePeriod(period)}
+                          disabled={deleting === period}
+                          className="text-red-400 hover:text-red-300 text-sm font-medium disabled:opacity-50 flex items-center gap-1"
+                        >
+                          {deleting === period ? (
+                            <>
+                              <div className="w-3 h-3 border-2 border-red-400/30 border-t-red-400 rounded-full animate-spin" />
+                              Deleting...
+                            </>
+                          ) : (
+                            'Delete Period'
+                          )}
+                        </button>
+                      </div>
+                      <p className="text-zinc-500 text-sm mb-2">{totalTx} transactions</p>
+                      <div className="space-y-1">
+                        {stmts.map(stmt => (
+                          <div key={stmt.id} className="text-xs text-zinc-500 flex items-center gap-2">
+                            <span className="px-1.5 py-0.5 bg-zinc-700 rounded">{stmt.bank}</span>
+                            <span className="truncate">{stmt.filename}</span>
+                            <span className="text-zinc-600">({stmt.transactions_count})</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              {/* Delete all */}
+              <div className="pt-4 border-t border-zinc-800">
+                {!confirmDeleteAll ? (
+                  <button
+                    onClick={() => setConfirmDeleteAll(true)}
+                    className="w-full py-3 text-red-400 hover:bg-red-500/10 rounded-xl font-medium transition-colors"
+                  >
+                    Delete All Data
+                  </button>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="text-center text-zinc-400 text-sm">Are you sure? This cannot be undone.</p>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setConfirmDeleteAll(false)}
+                        className="flex-1 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-medium"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleDeleteAll}
+                        disabled={deleting === 'all'}
+                        className="flex-1 py-2 bg-red-500 hover:bg-red-400 text-white rounded-xl font-medium disabled:opacity-50"
+                      >
+                        {deleting === 'all' ? 'Deleting...' : 'Yes, Delete All'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function AddMemberModal({ onSave, onClose }: { onSave: (name: string, role: string, baseSalary: number) => void; onClose: () => void }) {
   const [name, setName] = useState('')
   const [role, setRole] = useState('')
