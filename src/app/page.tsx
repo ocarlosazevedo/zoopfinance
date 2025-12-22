@@ -599,23 +599,39 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
     .sort((a, b) => b[1].total - a[1].total)
     .slice(0, 5)
 
-  // Currency breakdown
-  const currencyBreakdown = transactions.reduce((acc, t) => {
-    const currency = t.originalCurrency || t.currency || 'USD'
-    const amount = t.originalAmount !== undefined ? Math.abs(t.originalAmount) : Math.abs(t.amount)
-    const usdAmount = Math.abs(t.amount)
-    
-    if (!acc[currency]) {
-      acc[currency] = { original: 0, usd: 0, count: 0 }
-    }
-    acc[currency].original += amount
-    acc[currency].usd += usdAmount
-    acc[currency].count += 1
-    return acc
-  }, {} as Record<string, { original: number; usd: number; count: number }>)
+  // Currency breakdown - separate income and expenses
+  const currencyBreakdown = transactions
+    .filter(t => t.type !== 'internal') // Exclude internal transfers
+    .reduce((acc, t) => {
+      const currency = t.originalCurrency || t.currency || 'USD'
+      const originalAmount = t.originalAmount !== undefined ? Math.abs(t.originalAmount) : Math.abs(t.amount)
+      const usdAmount = Math.abs(t.amount)
+      
+      if (!acc[currency]) {
+        acc[currency] = { income: 0, incomeOriginal: 0, expenses: 0, expensesOriginal: 0, count: 0 }
+      }
+      
+      if (t.type === 'income') {
+        acc[currency].income += usdAmount
+        acc[currency].incomeOriginal += originalAmount
+      } else if (t.type === 'expense') {
+        acc[currency].expenses += usdAmount
+        acc[currency].expensesOriginal += originalAmount
+      }
+      acc[currency].count += 1
+      return acc
+    }, {} as Record<string, { income: number; incomeOriginal: number; expenses: number; expensesOriginal: number; count: number }>)
 
-  const currencySorted = Object.entries(currencyBreakdown).sort((a, b) => b[1].usd - a[1].usd)
-  const totalUSD = currencySorted.reduce((a, b) => a + b[1].usd, 0)
+  const currencySorted = Object.entries(currencyBreakdown)
+    .map(([currency, data]) => ({
+      currency,
+      ...data,
+      net: data.income - data.expenses,
+      total: data.income + data.expenses
+    }))
+    .sort((a, b) => b.total - a.total)
+  
+  const totalVolume = currencySorted.reduce((a, b) => a + b.total, 0)
 
   // Currency flags/symbols
   const currencyInfo: Record<string, { flag: string; symbol: string }> = {
@@ -771,32 +787,32 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
         <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl p-6">
           <h3 className="font-semibold mb-5">Currency Breakdown</h3>
           <div className="space-y-4">
-            {currencySorted.map(([currency, data]) => {
-              const percentage = totalUSD > 0 ? (data.usd / totalUSD) * 100 : 0
-              const info = currencyInfo[currency] || { flag: '💱', symbol: currency }
+            {currencySorted.map((data) => {
+              const info = currencyInfo[data.currency] || { flag: '💱', symbol: data.currency }
               return (
-                <div key={currency} className="flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-xl bg-zinc-700/50 flex items-center justify-center text-xl">
-                    {info.flag}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-medium">{currency}</span>
-                      <span className="text-zinc-400 text-sm">{percentage.toFixed(0)}%</span>
+                <div key={data.currency} className="space-y-2">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-zinc-700/50 flex items-center justify-center text-lg">
+                      {info.flag}
                     </div>
-                    <div className="h-1.5 bg-zinc-700/50 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 rounded-full transition-all duration-500"
-                        style={{ width: `${percentage}%` }}
-                      />
-                    </div>
+                    <span className="font-medium flex-1">{data.currency}</span>
+                    <span className={`font-semibold ${data.net >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {data.net >= 0 ? '+' : ''}{formatCurrency(data.net)}
+                    </span>
                   </div>
-                  <div className="text-right w-28">
-                    <p className="font-semibold">{formatCurrency(data.usd)}</p>
-                    {currency !== 'USD' && (
-                      <p className="text-zinc-500 text-xs">
-                        {info.symbol}{data.original.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                      </p>
+                  <div className="ml-11 flex items-center gap-4 text-sm">
+                    <div className="flex items-center gap-2">
+                      <span className="text-zinc-500">In:</span>
+                      <span className="text-emerald-400">{formatCurrency(data.income)}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-zinc-500">Out:</span>
+                      <span className="text-red-400">{formatCurrency(data.expenses)}</span>
+                    </div>
+                    {data.currency !== 'USD' && (
+                      <span className="text-zinc-600 text-xs">
+                        ({info.symbol}{data.incomeOriginal.toLocaleString(undefined, { maximumFractionDigits: 0 })} / {info.symbol}{data.expensesOriginal.toLocaleString(undefined, { maximumFractionDigits: 0 })})
+                      </span>
                     )}
                   </div>
                 </div>
@@ -809,7 +825,7 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
           {currencySorted.length > 0 && (
             <div className="mt-4 pt-4 border-t border-zinc-700/50 flex items-center justify-between">
               <span className="text-zinc-500 text-sm">{currencySorted.length} currencies</span>
-              <span className="text-zinc-500 text-sm">{transactions.length} transactions</span>
+              <span className="text-zinc-500 text-sm">{transactions.filter(t => t.type !== 'internal').length} transactions</span>
             </div>
           )}
         </div>
@@ -2028,9 +2044,10 @@ const categoryRules: { pattern: RegExp; category: string }[] = [
   { pattern: /google ads|googleads|dl\*google|dl \*google/i, category: 'Ads' },
   { pattern: /tiktok|snapchat|pinterest ads|twitter ads|linkedin ads/i, category: 'Ads' },
   { pattern: /adspower/i, category: 'Ads' },
-  // Sales / Revenue
-  { pattern: /shopify|stripe payout|paypal payout|amazon payout|etsy|ebay deposit/i, category: 'Sales' },
-  { pattern: /block craft|dinheiro adicionado/i, category: 'Sales' },  // Revolut topups from business
+  // Platform Fees (Shopify, Stripe fees - when expense)
+  { pattern: /shopify/i, category: 'Fees' },
+  { pattern: /stripe fee|stripe.com/i, category: 'Fees' },
+  { pattern: /paypal fee/i, category: 'Fees' },
   // Software / SaaS
   { pattern: /notion|slack|zoom|github|vercel|aws|google cloud|heroku|digitalocean/i, category: 'Software' },
   { pattern: /openai|anthropic|zapier|airtable|figma|canva|adobe|microsoft|dropbox|1password/i, category: 'Software' },
