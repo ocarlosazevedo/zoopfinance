@@ -19,6 +19,7 @@ type CategorizationRule = {
   keyword: string
   category: string
   match_type: 'contains' | 'exact' | 'starts_with'
+  transaction_type: 'all' | 'income' | 'expense' | 'internal'
   priority: number
   created_at?: string
 }
@@ -492,7 +493,7 @@ function OverviewTab({ data, transactions, onUpload, loading, categorizationRule
   onUpload: () => void
   loading: boolean
   categorizationRules?: CategorizationRule[]
-  onCreateRule?: (keyword: string, category: string, matchType: 'contains' | 'exact' | 'starts_with') => Promise<boolean>
+  onCreateRule?: (keyword: string, category: string, matchType: 'contains' | 'exact' | 'starts_with', transactionType?: 'all' | 'income' | 'expense' | 'internal') => Promise<boolean>
   onApplyRules?: () => Promise<number>
   allCategories?: { id: string; name: string; color: string }[]
   onBulkUpdateCategory?: (transactionIds: string[], category: string, createRule?: { keyword: string }) => Promise<boolean>
@@ -833,7 +834,7 @@ function OverviewTab({ data, transactions, onUpload, loading, categorizationRule
 
   const handleQuickRule = async (keyword: string, category: string) => {
     if (onCreateRule) {
-      const success = await onCreateRule(keyword, category, 'contains')
+      const success = await onCreateRule(keyword, category, 'contains', 'all')
       if (success && onApplyRules) {
         await onApplyRules()
       }
@@ -2453,7 +2454,7 @@ function RulesTab({
   onBulkUpdateRules
 }: { 
   rules: CategorizationRule[]
-  onCreateRule: (keyword: string, category: string, matchType: 'contains' | 'exact' | 'starts_with') => Promise<boolean>
+  onCreateRule: (keyword: string, category: string, matchType: 'contains' | 'exact' | 'starts_with', transactionType: 'all' | 'income' | 'expense' | 'internal') => Promise<boolean>
   onDeleteRule: (id: string) => Promise<boolean>
   onUpdateRule: (id: string, updates: Partial<CategorizationRule>) => Promise<boolean>
   transactions: Transaction[]
@@ -2484,6 +2485,7 @@ function RulesTab({
   const [bulkRuleCategory, setBulkRuleCategory] = useState('')
   const [ruleDetailModal, setRuleDetailModal] = useState<CategorizationRule | null>(null)
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
+  const [typeFilter, setTypeFilter] = useState<string>('all')
   const [bulkProcessing, setBulkProcessing] = useState(false)
   
   // Sorting state for rules
@@ -2532,6 +2534,11 @@ function RulesTab({
   // Get transactions matching a rule
   const getRuleTransactions = (rule: CategorizationRule) => {
     return transactions.filter(tx => {
+      // Check transaction type first
+      if (rule.transaction_type !== 'all' && tx.type !== rule.transaction_type) {
+        return false
+      }
+      
       const searchText = `${tx.description} ${tx.payee || ''}`.toLowerCase()
       switch (rule.match_type) {
         case 'exact': return searchText === rule.keyword
@@ -2587,7 +2594,8 @@ function RulesTab({
       const matchesSearch = r.keyword.toLowerCase().includes(searchTerm.toLowerCase()) ||
         r.category.toLowerCase().includes(searchTerm.toLowerCase())
       const matchesCategory = categoryFilter === 'all' || r.category === categoryFilter
-      return matchesSearch && matchesCategory
+      const matchesType = typeFilter === 'all' || (r.transaction_type || 'all') === typeFilter
+      return matchesSearch && matchesCategory && matchesType
     })
     .sort((a, b) => {
       let comparison = 0
@@ -2982,6 +2990,19 @@ function RulesTab({
         </div>
         <div className="relative">
           <select
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value)}
+            className="bg-zinc-800/50 border border-zinc-700 rounded-xl px-4 py-3 pr-10 focus:outline-none focus:border-zinc-600 appearance-none cursor-pointer min-w-[130px]"
+          >
+            <option value="all">All Types</option>
+            <option value="income">Income</option>
+            <option value="expense">Expense</option>
+            <option value="internal">Internal</option>
+          </select>
+          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
+        </div>
+        <div className="relative">
+          <select
             value={categoryFilter}
             onChange={(e) => setCategoryFilter(e.target.value)}
             className="bg-zinc-800/50 border border-zinc-700 rounded-xl px-4 py-3 pr-10 focus:outline-none focus:border-zinc-600 appearance-none cursor-pointer min-w-[180px]"
@@ -3049,7 +3070,7 @@ function RulesTab({
             </button>
           </div>
           <div 
-            className="col-span-4 cursor-pointer hover:text-white transition-colors flex items-center gap-1"
+            className="col-span-3 cursor-pointer hover:text-white transition-colors flex items-center gap-1"
             onClick={() => handleRuleSort('keyword')}
           >
             Keyword
@@ -3059,7 +3080,8 @@ function RulesTab({
               <ArrowUpDown className="w-3 h-3 opacity-30" />
             )}
           </div>
-          <div className="col-span-2">Match Type</div>
+          <div className="col-span-1">Type</div>
+          <div className="col-span-2">Match</div>
           <div 
             className="col-span-2 cursor-pointer hover:text-white transition-colors flex items-center gap-1"
             onClick={() => handleRuleSort('category')}
@@ -3107,6 +3129,7 @@ function RulesTab({
             {filteredRules.map((rule) => {
               const matchCount = getRuleMatchCount(rule)
               const isSelected = selectedRuleIds.has(rule.id)
+              const txType = rule.transaction_type || 'all'
               return (
                 <div 
                   key={rule.id} 
@@ -3125,9 +3148,19 @@ function RulesTab({
                       {isSelected && <Check className="w-3 h-3 text-black" strokeWidth={3} />}
                     </button>
                   </div>
-                  <div className="col-span-4">
-                    <span className="font-mono text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded">
+                  <div className="col-span-3">
+                    <span className="font-mono text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded text-sm">
                       {rule.keyword}
+                    </span>
+                  </div>
+                  <div className="col-span-1">
+                    <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                      txType === 'income' ? 'bg-emerald-500/20 text-emerald-400' :
+                      txType === 'expense' ? 'bg-red-500/20 text-red-400' :
+                      txType === 'internal' ? 'bg-blue-500/20 text-blue-400' :
+                      'bg-zinc-700 text-zinc-400'
+                    }`}>
+                      {txType === 'all' ? 'All' : txType.charAt(0).toUpperCase()}
                     </span>
                   </div>
                   <div className="col-span-2">
@@ -3164,9 +3197,17 @@ function RulesTab({
           <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-3xl max-h-[80vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
             <div className="p-5 border-b border-zinc-800 flex items-center justify-between flex-shrink-0">
               <div>
-                <h3 className="text-lg font-semibold flex items-center gap-3">
+                <h3 className="text-lg font-semibold flex items-center gap-3 flex-wrap">
                   <span className="font-mono text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded text-base">
                     {ruleDetailModal.keyword}
+                  </span>
+                  <span className={`px-2 py-1 rounded-lg text-xs font-medium ${
+                    (ruleDetailModal.transaction_type || 'all') === 'income' ? 'bg-emerald-500/20 text-emerald-400' :
+                    (ruleDetailModal.transaction_type || 'all') === 'expense' ? 'bg-red-500/20 text-red-400' :
+                    (ruleDetailModal.transaction_type || 'all') === 'internal' ? 'bg-blue-500/20 text-blue-400' :
+                    'bg-zinc-700 text-zinc-400'
+                  }`}>
+                    {(ruleDetailModal.transaction_type || 'all') === 'all' ? 'All Types' : ruleDetailModal.transaction_type}
                   </span>
                   <span className={`px-2 py-1 rounded-lg text-xs font-medium ${getCategoryBgClass(ruleDetailModal.category)}`}>
                     {ruleDetailModal.category}
@@ -3186,11 +3227,20 @@ function RulesTab({
                 {getRuleTransactions(ruleDetailModal).map((tx) => (
                   <div key={tx.id} className="flex items-center justify-between p-3 bg-zinc-800/50 rounded-lg">
                     <div className="flex-1 min-w-0">
-                      <p className="font-medium truncate">{tx.description}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-medium truncate">{tx.description}</p>
+                        <span className={`px-1.5 py-0.5 rounded text-xs ${
+                          tx.type === 'income' ? 'bg-emerald-500/20 text-emerald-400' :
+                          tx.type === 'expense' ? 'bg-red-500/20 text-red-400' :
+                          'bg-blue-500/20 text-blue-400'
+                        }`}>
+                          {tx.type}
+                        </span>
+                      </div>
                       <p className="text-zinc-500 text-sm">{tx.date} • {tx.bank}</p>
                     </div>
-                    <span className={`font-semibold ${tx.type === 'income' ? 'text-emerald-400' : 'text-red-400'}`}>
-                      {tx.type === 'income' ? '+' : '-'}{formatCurrency(Math.abs(tx.amount))}
+                    <span className={`font-semibold ${tx.type === 'income' ? 'text-emerald-400' : tx.type === 'expense' ? 'text-red-400' : 'text-blue-400'}`}>
+                      {tx.type === 'income' ? '+' : tx.type === 'internal' ? '' : '-'}{formatCurrency(Math.abs(tx.amount))}
                     </span>
                   </div>
                 ))}
@@ -3207,8 +3257,8 @@ function RulesTab({
       {showCreateModal && (
         <CreateRuleModal
           onClose={() => setShowCreateModal(false)}
-          onSave={async (keyword, category, matchType) => {
-            const success = await onCreateRule(keyword, category, matchType)
+          onSave={async (keyword, category, matchType, transactionType) => {
+            const success = await onCreateRule(keyword, category, matchType, transactionType)
             if (success) setShowCreateModal(false)
           }}
           categories={categoryNames}
@@ -3324,13 +3374,14 @@ function CreateRuleModal({
   initialKeyword = ''
 }: { 
   onClose: () => void
-  onSave: (keyword: string, category: string, matchType: 'contains' | 'exact' | 'starts_with') => void
+  onSave: (keyword: string, category: string, matchType: 'contains' | 'exact' | 'starts_with', transactionType: 'all' | 'income' | 'expense' | 'internal') => void
   categories: string[]
   initialKeyword?: string
 }) {
   const [keyword, setKeyword] = useState(initialKeyword)
   const [category, setCategory] = useState('Other')
   const [matchType, setMatchType] = useState<'contains' | 'exact' | 'starts_with'>('contains')
+  const [transactionType, setTransactionType] = useState<'all' | 'income' | 'expense' | 'internal'>('all')
 
   // Sort categories with Other always last
   const sortedCategories = [...categories.filter(c => c !== 'Other'), 'Other']
@@ -3358,6 +3409,29 @@ function CreateRuleModal({
               autoFocus
             />
             <p className="text-zinc-600 text-xs mt-1">Case-insensitive match on description and payee</p>
+          </div>
+
+          <div>
+            <label className="block text-zinc-400 text-sm mb-2">Transaction Type</label>
+            <div className="grid grid-cols-4 gap-2">
+              {(['all', 'income', 'expense', 'internal'] as const).map((type) => (
+                <button
+                  key={type}
+                  onClick={() => setTransactionType(type)}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    transactionType === type 
+                      ? type === 'income' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                        : type === 'expense' ? 'bg-red-500/20 text-red-400 border border-red-500/30'
+                        : type === 'internal' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                        : 'bg-zinc-600/20 text-white border border-zinc-500/30'
+                      : 'bg-zinc-800 text-zinc-400 border border-zinc-700 hover:border-zinc-600'
+                  }`}
+                >
+                  {type === 'all' ? 'All' : type.charAt(0).toUpperCase() + type.slice(1)}
+                </button>
+              ))}
+            </div>
+            <p className="text-zinc-600 text-xs mt-1">Apply rule only to specific transaction type</p>
           </div>
 
           <div>
@@ -3401,7 +3475,7 @@ function CreateRuleModal({
             Cancel
           </button>
           <button 
-            onClick={() => onSave(keyword, category, matchType)}
+            onClick={() => onSave(keyword, category, matchType, transactionType)}
             disabled={!keyword.trim()}
             className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
@@ -3844,12 +3918,13 @@ export default function Dashboard() {
   // ============================================
   // CATEGORIZATION RULES MANAGEMENT
   // ============================================
-  const handleCreateRule = async (keyword: string, category: string, matchType: 'contains' | 'exact' | 'starts_with' = 'contains') => {
+  const handleCreateRule = async (keyword: string, category: string, matchType: 'contains' | 'exact' | 'starts_with' = 'contains', transactionType: 'all' | 'income' | 'expense' | 'internal' = 'all') => {
     const newRule: CategorizationRule = {
       id: crypto.randomUUID(),
       keyword: keyword.toLowerCase().trim(),
       category,
       match_type: matchType,
+      transaction_type: transactionType,
       priority: categorizationRules.length + 1
     }
     
@@ -3930,31 +4005,32 @@ export default function Dashboard() {
     let updatedCount = 0
     
     try {
+      // Helper to check if rule matches transaction
+      const ruleMatchesTransaction = (rule: CategorizationRule, tx: Transaction) => {
+        // Check transaction type first
+        if (rule.transaction_type !== 'all' && tx.type !== rule.transaction_type) {
+          return false
+        }
+        
+        const searchText = `${tx.description} ${tx.payee || ''}`.toLowerCase()
+        switch (rule.match_type) {
+          case 'exact': return searchText === rule.keyword
+          case 'starts_with': return searchText.startsWith(rule.keyword)
+          default: return searchText.includes(rule.keyword)
+        }
+      }
+      
       // Get all transactions that could be re-categorized
       const txsToUpdate = transactions.filter(tx => {
         // Check if any rule matches
-        const matchingRule = categorizationRules.find(rule => {
-          const searchText = `${tx.description} ${tx.payee || ''}`.toLowerCase()
-          switch (rule.match_type) {
-            case 'exact': return searchText === rule.keyword
-            case 'starts_with': return searchText.startsWith(rule.keyword)
-            default: return searchText.includes(rule.keyword)
-          }
-        })
+        const matchingRule = categorizationRules.find(rule => ruleMatchesTransaction(rule, tx))
         // Only update if a rule matches AND current category is different
         return matchingRule && tx.category !== matchingRule.category
       })
       
       // Update each matching transaction
       for (const tx of txsToUpdate) {
-        const matchingRule = categorizationRules.find(rule => {
-          const searchText = `${tx.description} ${tx.payee || ''}`.toLowerCase()
-          switch (rule.match_type) {
-            case 'exact': return searchText === rule.keyword
-            case 'starts_with': return searchText.startsWith(rule.keyword)
-            default: return searchText.includes(rule.keyword)
-          }
-        })
+        const matchingRule = categorizationRules.find(rule => ruleMatchesTransaction(rule, tx))
         
         if (matchingRule) {
           const { error } = await (supabase
@@ -4000,6 +4076,7 @@ export default function Dashboard() {
           keyword: createRule.keyword.toLowerCase().trim(),
           category,
           match_type: 'contains',
+          transaction_type: 'all',
           priority: categorizationRules.length + 1
         }
         
