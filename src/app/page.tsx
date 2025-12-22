@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Upload, Calendar, LayoutDashboard, Receipt, Users, ChevronDown, ChevronLeft, ChevronRight, Plus, Pencil, X, FileUp, UserPlus, DollarSign, PoundSterling, Euro, Building2, CreditCard, Landmark, Loader2, Banknote, Check, Tag, Trash2, Search, Zap, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react'
+import { Upload, Calendar, LayoutDashboard, Receipt, Users, ChevronDown, ChevronLeft, ChevronRight, Plus, Pencil, X, FileUp, UserPlus, DollarSign, PoundSterling, Euro, Building2, CreditCard, Landmark, Loader2, Banknote, Check, Tag, Trash2, Search, Zap, ArrowUpDown, ArrowUp, ArrowDown, AlertCircle } from 'lucide-react'
 import { createClient } from '@/lib/supabase'
 
 // ============================================
@@ -27,9 +27,7 @@ type TeamMember = {
   id: string
   name: string
   role: string
-  baseSalary: number
   beneficiaryAccount?: string // Account number for auto-matching payments
-  compensation: Record<string, { variable: number; note: string }>
 }
 
 type Transaction = {
@@ -52,6 +50,7 @@ type Transaction = {
   transactionType?: string // Original type: Receive-transfer, Spend, CARD_PAYMENT, etc
   status?: string          // SETTLED, PENDING, COMPLETED, etc
   balance?: number         // Balance after transaction
+  linkedMemberId?: string  // Link to team member (for Payroll)
 }
 
 // ============================================
@@ -2208,226 +2207,366 @@ function TransactionDetailModal({ transaction: tx, onClose, allCategories, onUpd
 // ============================================
 // PAYROLL TAB
 // ============================================
-function PayrollTab({ teamMembers, currentMonth, onUpdateVariable, onAddMember, onDeleteMember, loading, payrollTransactions }: { 
-  teamMembers: TeamMember[]
-  currentMonth: string
-  onUpdateVariable: (id: string, variable: number, note: string) => void
-  onAddMember: () => void
-  onDeleteMember: (id: string) => void
-  loading: boolean
+function PayrollTab({ 
+  payrollTransactions, 
+  teamMembers,
+  onUpdateMember,
+  onLinkTransaction,
+  currentMonth,
+  loading 
+}: { 
   payrollTransactions: Transaction[]
+  teamMembers: TeamMember[]
+  onUpdateMember: (id: string, updates: Partial<TeamMember>) => Promise<boolean>
+  onLinkTransaction: (transactionId: string, memberId: string) => Promise<boolean>
+  currentMonth: string
+  loading: boolean
 }) {
   const [editingMember, setEditingMember] = useState<TeamMember | null>(null)
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
-  const [showTransactions, setShowTransactions] = useState(false)
+  const [linkingTransaction, setLinkingTransaction] = useState<Transaction | null>(null)
+  const [expandedMember, setExpandedMember] = useState<string | null>(null)
 
-  const totals = teamMembers.reduce((acc, m) => {
-    const comp = m.compensation[currentMonth] || { variable: 0 }
-    return { base: acc.base + m.baseSalary, variable: acc.variable + comp.variable, total: acc.total + m.baseSalary + comp.variable }
-  }, { base: 0, variable: 0, total: 0 })
+  // Group transactions by team member
+  const memberTransactions = teamMembers.map(member => {
+    const txs = payrollTransactions.filter(tx => tx.linkedMemberId === member.id)
+    const total = txs.reduce((sum, tx) => sum + Math.abs(tx.amount), 0)
+    return { member, transactions: txs, total }
+  })
 
-  // Calculate total from transactions
-  const txTotal = payrollTransactions.reduce((sum, tx) => sum + Math.abs(tx.amount), 0)
+  // Unlinked transactions (not assigned to any team member)
+  const unlinkedTransactions = payrollTransactions.filter(tx => !tx.linkedMemberId)
 
-  // Show skeleton while loading
+  // Total from all payroll transactions
+  const totalPayroll = payrollTransactions.reduce((sum, tx) => sum + Math.abs(tx.amount), 0)
+  const linkedTotal = memberTransactions.reduce((sum, mt) => sum + mt.total, 0)
+  const unlinkedTotal = unlinkedTransactions.reduce((sum, tx) => sum + Math.abs(tx.amount), 0)
+
   if (loading) {
     return <LoadingSkeleton />
   }
 
-  if (teamMembers.length === 0) {
-    return (
-      <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl">
-        <EmptyState
-          icon={UserPlus}
-          title="No team members yet"
-          description="Add your first team member to start tracking payroll and variable compensation."
-          action={onAddMember}
-          actionLabel="Add Team Member"
-        />
-      </div>
-    )
-  }
-
   return (
     <div className="space-y-6">
+      {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="bg-purple-500/20 border border-purple-500/30 rounded-2xl p-5">
           <p className="text-purple-400/80 text-sm mb-1">Total Payroll</p>
-          <p className="text-3xl font-bold">{formatCurrency(totals.total)}</p>
+          <p className="text-3xl font-bold">{formatCurrency(totalPayroll)}</p>
         </div>
         <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl p-5">
-          <p className="text-zinc-400 text-sm mb-1">Base</p>
-          <p className="text-2xl font-bold">{formatCurrency(totals.base)}</p>
+          <p className="text-zinc-400 text-sm mb-1">Linked</p>
+          <p className="text-2xl font-bold">{formatCurrency(linkedTotal)}</p>
         </div>
-        <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5">
-          <p className="text-amber-400/80 text-sm mb-1">Variable</p>
-          <p className="text-2xl font-bold text-amber-400">{formatCurrency(totals.variable)}</p>
+        <div className={`rounded-2xl p-5 ${unlinkedTotal > 0 ? 'bg-amber-500/10 border border-amber-500/30' : 'bg-zinc-800/50 border border-zinc-700'}`}>
+          <p className={`text-sm mb-1 ${unlinkedTotal > 0 ? 'text-amber-400/80' : 'text-zinc-400'}`}>Unlinked</p>
+          <p className={`text-2xl font-bold ${unlinkedTotal > 0 ? 'text-amber-400' : ''}`}>{formatCurrency(unlinkedTotal)}</p>
         </div>
-        <div 
-          onClick={() => setShowTransactions(!showTransactions)}
-          className="bg-blue-500/10 border border-blue-500/30 rounded-2xl p-5 cursor-pointer hover:bg-blue-500/20 transition-colors"
-        >
-          <p className="text-blue-400/80 text-sm mb-1">From Transactions</p>
-          <div className="flex items-center justify-between">
-            <p className="text-2xl font-bold text-blue-400">{formatCurrency(txTotal)}</p>
-            <span className="text-blue-400/60 text-sm">{payrollTransactions.length} tx</span>
-          </div>
+        <div className="bg-blue-500/10 border border-blue-500/30 rounded-2xl p-5">
+          <p className="text-blue-400/80 text-sm mb-1">Transactions</p>
+          <p className="text-2xl font-bold text-blue-400">{payrollTransactions.length}</p>
         </div>
       </div>
 
-      {/* Payroll Transactions Section */}
-      {showTransactions && payrollTransactions.length > 0 && (
-        <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl overflow-hidden">
-          <div className="p-4 border-b border-zinc-700 flex items-center justify-between">
-            <h3 className="font-semibold">Payroll Transactions</h3>
-            <button onClick={() => setShowTransactions(false)} className="text-zinc-400 hover:text-white">
-              <X className="w-4 h-4" />
-            </button>
+      {/* Unlinked Transactions - Need to be assigned */}
+      {unlinkedTransactions.length > 0 && (
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl overflow-hidden">
+          <div className="p-4 border-b border-amber-500/20 flex items-center gap-2">
+            <AlertCircle className="w-5 h-5 text-amber-400" />
+            <h3 className="font-semibold text-amber-400">Unlinked Payroll Transactions</h3>
+            <span className="text-amber-400/60 text-sm ml-auto">{unlinkedTransactions.length} transactions need assignment</span>
           </div>
-          <div className="max-h-[300px] overflow-y-auto">
-            <div className="divide-y divide-zinc-800">
-              {payrollTransactions.map((tx) => (
-                <div key={tx.id} className="p-4 flex items-center justify-between hover:bg-zinc-800/30">
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium truncate">{tx.description}</p>
-                    <p className="text-zinc-500 text-sm">{tx.date} • {tx.bank}</p>
-                  </div>
-                  <span className="text-red-400 font-semibold">-{formatCurrency(Math.abs(tx.amount))}</span>
+          <div className="divide-y divide-amber-500/10">
+            {unlinkedTransactions.map((tx) => (
+              <div key={tx.id} className="p-4 flex items-center justify-between hover:bg-amber-500/5">
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium truncate">{tx.description}</p>
+                  <p className="text-zinc-500 text-sm">{tx.date} • {tx.bank}</p>
                 </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl overflow-hidden">
-        <div className="p-4 border-b border-zinc-700 flex items-center justify-between">
-          <h3 className="font-semibold">Team — {currentMonth}</h3>
-          <button onClick={onAddMember} className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-black font-medium px-3 py-1.5 rounded-lg text-sm transition-colors">
-            <UserPlus className="w-4 h-4" />
-            Add Member
-          </button>
-        </div>
-        <div className="divide-y divide-zinc-800">
-          {teamMembers.map((member) => {
-            const comp = member.compensation[currentMonth] || { variable: 0, note: '' }
-            const total = member.baseSalary + comp.variable
-            return (
-              <div key={member.id} className="p-4 flex items-center justify-between hover:bg-zinc-800/30 group">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-zinc-700 flex items-center justify-center font-medium text-sm">
-                    {member.name.split(' ').map(n => n[0]).join('').slice(0,2)}
-                  </div>
-                  <div>
-                    <p className="font-medium">{member.name}</p>
-                    <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: `${roleColors[member.role] || '#6b7280'}20`, color: roleColors[member.role] || '#6b7280' }}>{member.role}</span>
-                  </div>
-                </div>
-                <div className="flex items-center gap-4">
-                  <div className="text-right"><p className="text-zinc-500 text-xs">Base</p><p className="font-medium">{formatCurrency(member.baseSalary)}</p></div>
-                  <div className="text-right min-w-[140px]">
-                    <p className="text-zinc-500 text-xs mb-1">Variable</p>
-                    <button
-                      onClick={() => setEditingMember(member)}
-                      className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg font-medium transition-all ${comp.variable > 0 ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30 hover:bg-amber-500/30' : 'bg-zinc-700 text-zinc-400 hover:bg-zinc-600'}`}
-                    >
-                      {comp.variable > 0 ? <><span>+{formatCurrency(comp.variable)}</span><Pencil className="w-3.5 h-3.5 opacity-60" /></> : <><Plus className="w-4 h-4" /><span>Add</span></>}
-                    </button>
-                  </div>
-                  <div className="text-right min-w-[80px]"><p className="text-zinc-500 text-xs">Total</p><p className="font-bold text-lg">{formatCurrency(total)}</p></div>
+                  <span className="text-red-400 font-semibold">-{formatCurrency(Math.abs(tx.amount))}</span>
                   <button
-                    onClick={() => setConfirmDelete(member.id)}
-                    className="opacity-0 group-hover:opacity-100 p-2 hover:bg-red-500/20 rounded-lg text-zinc-400 hover:text-red-400 transition-all ml-2"
-                    title="Delete member"
+                    onClick={() => setLinkingTransaction(tx)}
+                    className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 rounded-lg text-sm font-medium transition-colors"
                   >
-                    <Trash2 className="w-4 h-4" />
+                    Assign
                   </button>
                 </div>
               </div>
-            )
-          })}
-        </div>
-        <div className="p-4 border-t border-zinc-700 bg-zinc-800/30 flex justify-between items-center">
-          <span className="text-zinc-500">{teamMembers.length} members</span>
-          <div className="flex items-center gap-6">
-            <span className="text-zinc-400">{formatCurrency(totals.base)}</span>
-            <span className="text-amber-400">{formatCurrency(totals.variable)}</span>
-            <span className="font-bold text-xl pl-4 border-l border-zinc-700">{formatCurrency(totals.total)}</span>
+            ))}
           </div>
         </div>
-      </div>
-      {editingMember && (
-        <EditVariableModal
-          member={editingMember}
-          month={currentMonth}
-          currentValue={editingMember.compensation[currentMonth]?.variable || 0}
-          currentNote={editingMember.compensation[currentMonth]?.note || ''}
-          onSave={(variable, note) => { onUpdateVariable(editingMember.id, variable, note); setEditingMember(null) }}
-          onClose={() => setEditingMember(null)}
-        />
       )}
-      {/* Confirm Delete Modal */}
-      {confirmDelete && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setConfirmDelete(null)}>
+
+      {/* Team Members */}
+      <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl overflow-hidden">
+        <div className="p-4 border-b border-zinc-700 flex items-center justify-between">
+          <h3 className="font-semibold">Team — {currentMonth}</h3>
+          <span className="text-zinc-500 text-sm">{teamMembers.length} members</span>
+        </div>
+        
+        {teamMembers.length === 0 ? (
+          <div className="p-12 text-center">
+            <Users className="w-12 h-12 text-zinc-600 mx-auto mb-4" />
+            <p className="text-zinc-400 font-medium mb-2">No team members yet</p>
+            <p className="text-zinc-600 text-sm">Assign payroll transactions above to create team members</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-zinc-800">
+            {memberTransactions.map(({ member, transactions: txs, total }) => (
+              <div key={member.id}>
+                <div 
+                  className="p-4 flex items-center justify-between hover:bg-zinc-800/30 cursor-pointer"
+                  onClick={() => setExpandedMember(expandedMember === member.id ? null : member.id)}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-zinc-700 flex items-center justify-center font-medium text-sm">
+                      {member.name.split(' ').map(n => n[0]).join('').slice(0,2).toUpperCase()}
+                    </div>
+                    <div>
+                      <p className="font-medium">{member.name}</p>
+                      <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: `${roleColors[member.role] || '#6b7280'}20`, color: roleColors[member.role] || '#6b7280' }}>
+                        {member.role}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <div className="text-right">
+                      <p className="text-zinc-500 text-xs">{txs.length} payments</p>
+                      <p className="font-bold text-lg">{formatCurrency(total)}</p>
+                    </div>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setEditingMember(member) }}
+                      className="p-2 hover:bg-zinc-700 rounded-lg text-zinc-400 hover:text-white transition-colors"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <ChevronDown className={`w-4 h-4 text-zinc-500 transition-transform ${expandedMember === member.id ? 'rotate-180' : ''}`} />
+                  </div>
+                </div>
+                
+                {/* Expanded transactions */}
+                {expandedMember === member.id && txs.length > 0 && (
+                  <div className="bg-zinc-900/50 border-t border-zinc-800">
+                    {txs.map((tx) => (
+                      <div key={tx.id} className="px-4 py-3 pl-16 flex items-center justify-between border-b border-zinc-800/50 last:border-0">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm truncate">{tx.description}</p>
+                          <p className="text-zinc-600 text-xs">{tx.date} • {tx.bank}</p>
+                        </div>
+                        <span className="text-red-400 font-medium text-sm">-{formatCurrency(Math.abs(tx.amount))}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        
+        {teamMembers.length > 0 && (
+          <div className="p-4 border-t border-zinc-700 bg-zinc-800/30 flex justify-between items-center">
+            <span className="text-zinc-500">{teamMembers.length} members</span>
+            <span className="font-bold text-xl">{formatCurrency(linkedTotal)}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Edit Member Modal */}
+      {editingMember && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setEditingMember(null)}>
           <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
-            <div className="p-5 border-b border-zinc-800">
-              <h3 className="font-semibold text-lg">Delete Team Member</h3>
-              <p className="text-zinc-500 text-sm mt-1">Are you sure you want to remove this person from payroll?</p>
-            </div>
-            <div className="p-5 flex gap-3">
-              <button onClick={() => setConfirmDelete(null)} className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-medium transition-colors">
-                Cancel
-              </button>
-              <button 
-                onClick={() => { onDeleteMember(confirmDelete); setConfirmDelete(null) }} 
-                className="flex-1 py-3 bg-red-500 hover:bg-red-400 text-white font-semibold rounded-xl transition-colors"
-              >
-                Delete
+            <div className="p-5 border-b border-zinc-800 flex items-center justify-between">
+              <h3 className="font-semibold">Edit Team Member</h3>
+              <button onClick={() => setEditingMember(null)} className="p-2 hover:bg-zinc-800 rounded-lg">
+                <X className="w-5 h-5 text-zinc-400" />
               </button>
             </div>
+            <EditMemberForm 
+              member={editingMember} 
+              onSave={async (updates) => {
+                await onUpdateMember(editingMember.id, updates)
+                setEditingMember(null)
+              }}
+              onClose={() => setEditingMember(null)}
+            />
           </div>
         </div>
+      )}
+
+      {/* Link Transaction Modal */}
+      {linkingTransaction && (
+        <LinkTransactionModal
+          transaction={linkingTransaction}
+          teamMembers={teamMembers}
+          onLink={async (memberId) => {
+            await onLinkTransaction(linkingTransaction.id, memberId)
+            setLinkingTransaction(null)
+          }}
+          onCreateNew={async (name, role) => {
+            // Will be handled by parent - creates member and links transaction
+            const newMemberId = crypto.randomUUID()
+            await onLinkTransaction(linkingTransaction.id, newMemberId)
+            setLinkingTransaction(null)
+          }}
+          onClose={() => setLinkingTransaction(null)}
+        />
       )}
     </div>
   )
 }
 
-// ============================================
-// EDIT VARIABLE MODAL
-// ============================================
-function EditVariableModal({ member, month, currentValue, currentNote, onSave, onClose }: { member: TeamMember; month: string; currentValue: number; currentNote: string; onSave: (variable: number, note: string) => void; onClose: () => void }) {
-  const [amount, setAmount] = useState(currentValue.toString())
-  const [note, setNote] = useState(currentNote)
-  const total = member.baseSalary + (parseFloat(amount) || 0)
+// Edit Member Form
+function EditMemberForm({ member, onSave, onClose }: { 
+  member: TeamMember
+  onSave: (updates: Partial<TeamMember>) => void
+  onClose: () => void
+}) {
+  const [name, setName] = useState(member.name)
+  const [role, setRole] = useState(member.role)
 
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-sm">
-        <div className="p-5 border-b border-zinc-800 flex items-center justify-between">
-          <div><p className="font-semibold">{member.name}</p><p className="text-zinc-500 text-sm">{month}</p></div>
-          <button onClick={onClose} className="p-2 hover:bg-zinc-800 rounded-lg"><X className="w-5 h-5 text-zinc-400" /></button>
+    <>
+      <div className="p-5 space-y-4">
+        <div>
+          <label className="block text-zinc-400 text-sm mb-2">Name</label>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 focus:outline-none focus:border-emerald-500"
+            autoFocus
+          />
         </div>
-        <div className="p-5 space-y-4">
-          <div className="flex justify-between py-3 border-b border-zinc-800"><span className="text-zinc-400">Base (fixo)</span><span className="font-semibold">{formatCurrency(member.baseSalary)}</span></div>
-          <div>
-            <label className="block text-zinc-400 text-sm mb-2">Variável do mês</label>
-            <div className="relative">
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500">$</span>
-              <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} autoFocus className="w-full bg-zinc-800 border border-zinc-700 rounded-xl pl-9 pr-4 py-3 text-xl font-bold focus:outline-none focus:border-amber-500" />
+        <div>
+          <label className="block text-zinc-400 text-sm mb-2">Role</label>
+          <input
+            type="text"
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+            placeholder="e.g., Developer, Designer, Manager"
+            className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 focus:outline-none focus:border-emerald-500"
+          />
+        </div>
+      </div>
+      <div className="p-5 border-t border-zinc-800 flex gap-3">
+        <button onClick={onClose} className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-medium transition-colors">
+          Cancel
+        </button>
+        <button 
+          onClick={() => onSave({ name, role })}
+          disabled={!name.trim()}
+          className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold rounded-xl transition-colors disabled:opacity-50"
+        >
+          Save
+        </button>
+      </div>
+    </>
+  )
+}
+
+// Link Transaction Modal
+function LinkTransactionModal({ transaction, teamMembers, onLink, onCreateNew, onClose }: {
+  transaction: Transaction
+  teamMembers: TeamMember[]
+  onLink: (memberId: string) => void
+  onCreateNew: (name: string, role: string) => void
+  onClose: () => void
+}) {
+  const [mode, setMode] = useState<'select' | 'create'>('select')
+  const [newName, setNewName] = useState(transaction.description)
+  const [newRole, setNewRole] = useState('')
+
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+        <div className="p-5 border-b border-zinc-800">
+          <h3 className="font-semibold">Assign Payroll Transaction</h3>
+          <div className="mt-3 p-3 bg-zinc-800 rounded-lg">
+            <p className="font-medium truncate">{transaction.description}</p>
+            <div className="flex items-center justify-between mt-1">
+              <span className="text-zinc-500 text-sm">{transaction.date}</span>
+              <span className="text-red-400 font-semibold">-{formatCurrency(Math.abs(transaction.amount))}</span>
             </div>
           </div>
-          <div>
-            <label className="block text-zinc-400 text-sm mb-2">Observação</label>
-            <input type="text" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Ex: Comissão, bônus..." className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 focus:outline-none focus:border-zinc-600" />
-          </div>
-          <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4 flex justify-between items-center">
-            <span className="text-emerald-400">Total</span>
-            <span className="text-emerald-400 font-bold text-2xl">{formatCurrency(total)}</span>
-          </div>
         </div>
+        
+        <div className="p-5">
+          {mode === 'select' && teamMembers.length > 0 ? (
+            <div className="space-y-2">
+              <p className="text-zinc-400 text-sm mb-3">Select existing team member:</p>
+              {teamMembers.map((member) => (
+                <button
+                  key={member.id}
+                  onClick={() => onLink(member.id)}
+                  className="w-full flex items-center gap-3 p-3 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors text-left"
+                >
+                  <div className="w-8 h-8 rounded-full bg-zinc-700 flex items-center justify-center font-medium text-xs">
+                    {member.name.split(' ').map(n => n[0]).join('').slice(0,2).toUpperCase()}
+                  </div>
+                  <div>
+                    <p className="font-medium">{member.name}</p>
+                    <p className="text-zinc-500 text-xs">{member.role}</p>
+                  </div>
+                </button>
+              ))}
+              <button
+                onClick={() => setMode('create')}
+                className="w-full flex items-center gap-3 p-3 border border-dashed border-zinc-700 hover:border-emerald-500 rounded-lg transition-colors text-left mt-4"
+              >
+                <div className="w-8 h-8 rounded-full bg-emerald-500/20 flex items-center justify-center">
+                  <UserPlus className="w-4 h-4 text-emerald-400" />
+                </div>
+                <span className="text-emerald-400 font-medium">Create new team member</span>
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <p className="text-zinc-400 text-sm">Create new team member:</p>
+              <div>
+                <label className="block text-zinc-400 text-sm mb-2">Name</label>
+                <input
+                  type="text"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 focus:outline-none focus:border-emerald-500"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="block text-zinc-400 text-sm mb-2">Role</label>
+                <input
+                  type="text"
+                  value={newRole}
+                  onChange={(e) => setNewRole(e.target.value)}
+                  placeholder="e.g., Developer, Designer"
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+              {teamMembers.length > 0 && (
+                <button
+                  onClick={() => setMode('select')}
+                  className="text-zinc-400 hover:text-white text-sm"
+                >
+                  ← Back to select existing
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
         <div className="p-5 border-t border-zinc-800 flex gap-3">
-          <button onClick={onClose} className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-medium">Cancelar</button>
-          <button onClick={() => onSave(parseFloat(amount) || 0, note)} className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold rounded-xl">Salvar</button>
+          <button onClick={onClose} className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-medium transition-colors">
+            Cancel
+          </button>
+          {mode === 'create' && (
+            <button 
+              onClick={() => onCreateNew(newName, newRole)}
+              disabled={!newName.trim()}
+              className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold rounded-xl transition-colors disabled:opacity-50"
+            >
+              Create & Assign
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -3462,7 +3601,6 @@ export default function Dashboard() {
     return []
   })
   const [showUploadModal, setShowUploadModal] = useState(false)
-  const [showAddMemberModal, setShowAddMemberModal] = useState(false)
   const [showManageDataModal, setShowManageDataModal] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -3566,7 +3704,8 @@ export default function Dashboard() {
           accountNumber: tx.account_number || undefined,
           transactionType: tx.transaction_type || undefined,
           status: tx.status || undefined,
-          balance: tx.balance ? parseFloat(tx.balance) : undefined
+          balance: tx.balance ? parseFloat(tx.balance) : undefined,
+          linkedMemberId: tx.linked_member_id || undefined
         }))
         
         setTransactions(mapped)
@@ -3590,24 +3729,12 @@ export default function Dashboard() {
         .select('*')
       
       if (!teamError && teamData) {
-        // Load compensation for each member
-        const { data: compData } = await supabase.from('compensation').select('*')
-        
-        setTeamMembers((teamData as any[]).map(m => {
-          const memberComp = (compData as any[] || []).filter(c => c.member_id === m.id)
-          const compensation: Record<string, { variable: number; note: string }> = {}
-          memberComp.forEach(c => {
-            compensation[c.period] = { variable: parseFloat(c.variable_amount), note: c.note || '' }
-          })
-          return {
-            id: m.id,
-            name: m.name,
-            role: m.role,
-            baseSalary: parseFloat(m.base_salary),
-            beneficiaryAccount: m.beneficiary_account || undefined,
-            compensation
-          }
-        }))
+        setTeamMembers((teamData as any[]).map(m => ({
+          id: m.id,
+          name: m.name,
+          role: m.role,
+          beneficiaryAccount: m.beneficiary_account || undefined
+        })))
       }
 
       // Load categorization rules
@@ -3757,20 +3884,22 @@ export default function Dashboard() {
     }
   }
 
-  // Filter transactions by selected period
+  // Filter transactions by selected period (using actual transaction date)
   const filteredTransactions = transactions.filter(tx => {
-    if (!tx.period) return true
+    const txDate = new Date(tx.date)
+    const txYear = txDate.getFullYear()
+    const txMonth = txDate.getMonth() // 0-11
+    
+    // Must be from selected year
+    if (txYear !== selectedYear) return false
     
     if (selectedMonths.length === 0) {
       // All year - show all from selected year
-      return tx.period.includes(String(selectedYear))
+      return true
     }
     
     // Filter by selected months
-    return selectedMonths.some(monthIdx => {
-      const periodStr = `${monthNamesShort[monthIdx]} ${selectedYear}`
-      return tx.period === periodStr
-    })
+    return selectedMonths.includes(txMonth)
   })
 
   // Calculate aggregated data from FILTERED transactions
@@ -3798,58 +3927,73 @@ export default function Dashboard() {
     return currentMonthStr
   }
 
-  const handleUpdateVariable = (id: string, variable: number, note: string) => {
-    const month = getPayrollMonth()
-    setTeamMembers(prev => prev.map(m => m.id !== id ? m : { ...m, compensation: { ...m.compensation, [month]: { variable, note } } }))
-  }
-
-  const handleAddMember = async (name: string, role: string, baseSalary: number, beneficiaryAccount?: string) => {
-    const newMember: TeamMember = {
-      id: crypto.randomUUID(),
-      name,
-      role,
-      baseSalary,
-      beneficiaryAccount,
-      compensation: {}
-    }
-    
-    // Save to Supabase
-    const { error } = await supabase
-      .from('team_members')
-      .insert({
-        id: newMember.id,
-        name,
-        role,
-        base_salary: baseSalary,
-        beneficiary_account: beneficiaryAccount || null
-      } as any)
-    
-    if (error) {
-      console.error('Error saving team member:', error)
-    } else {
-      setTeamMembers(prev => [...prev, newMember])
-    }
-    setShowAddMemberModal(false)
-  }
-
-  const handleDeleteMember = async (memberId: string) => {
-    // Delete compensation records first
-    await (supabase
-      .from('compensation') as any)
-      .delete()
-      .eq('member_id', memberId)
-    
-    // Delete team member
+  // Update team member info
+  const handleUpdateMember = async (id: string, updates: Partial<TeamMember>) => {
     const { error } = await (supabase
       .from('team_members') as any)
-      .delete()
-      .eq('id', memberId)
+      .update({
+        name: updates.name,
+        role: updates.role
+      })
+      .eq('id', id)
     
     if (error) {
-      console.error('Error deleting team member:', error)
-    } else {
-      setTeamMembers(prev => prev.filter(m => m.id !== memberId))
+      console.error('Error updating team member:', error)
+      return false
     }
+    
+    setTeamMembers(prev => prev.map(m => m.id === id ? { ...m, ...updates } : m))
+    return true
+  }
+
+  // Link a payroll transaction to a team member (or create new member)
+  const handleLinkTransaction = async (transactionId: string, memberId: string) => {
+    // Check if member exists
+    let member = teamMembers.find(m => m.id === memberId)
+    
+    if (!member) {
+      // Create new member from transaction description
+      const tx = transactions.find(t => t.id === transactionId)
+      if (!tx) return false
+      
+      const newMember: TeamMember = {
+        id: memberId,
+        name: tx.description,
+        role: 'Team Member'
+      }
+      
+      // Save new member to Supabase
+      const { error: memberError } = await (supabase
+        .from('team_members') as any)
+        .insert({
+          id: newMember.id,
+          name: newMember.name,
+          role: newMember.role
+        })
+      
+      if (memberError) {
+        console.error('Error creating team member:', memberError)
+        return false
+      }
+      
+      setTeamMembers(prev => [...prev, newMember])
+    }
+    
+    // Update transaction with linked member
+    const { error } = await (supabase
+      .from('transactions') as any)
+      .update({ linked_member_id: memberId })
+      .eq('id', transactionId)
+    
+    if (error) {
+      console.error('Error linking transaction:', error)
+      return false
+    }
+    
+    setTransactions(prev => prev.map(tx => 
+      tx.id === transactionId ? { ...tx, linkedMemberId: memberId } : tx
+    ))
+    return true
   }
 
   // ============================================
@@ -4249,7 +4393,14 @@ export default function Dashboard() {
         <main className="p-6">
           {activeTab === 'overview' && <OverviewTab data={aggregatedData} transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} loading={loading} categorizationRules={categorizationRules} onCreateRule={handleCreateRule} onApplyRules={handleApplyRulesToExisting} allCategories={allCategories} onBulkUpdateCategory={handleBulkUpdateCategory} />}
           {activeTab === 'transactions' && <TransactionsTab transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} selectedYear={selectedYear} selectedMonths={selectedMonths} loading={loading} allCategories={allCategories} onUpdateTransaction={handleUpdateTransaction} onBulkUpdateTransactions={handleBulkUpdateTransactions} />}
-          {activeTab === 'payroll' && <PayrollTab teamMembers={teamMembers} currentMonth={getPayrollMonth()} onUpdateVariable={handleUpdateVariable} onAddMember={() => setShowAddMemberModal(true)} onDeleteMember={handleDeleteMember} loading={loading} payrollTransactions={filteredTransactions.filter(tx => tx.category === 'Payroll')} />}
+          {activeTab === 'payroll' && <PayrollTab 
+            payrollTransactions={filteredTransactions.filter(tx => tx.category === 'Payroll')} 
+            teamMembers={teamMembers}
+            onUpdateMember={handleUpdateMember}
+            onLinkTransaction={handleLinkTransaction}
+            currentMonth={getPayrollMonth()}
+            loading={loading}
+          />}
           {activeTab === 'rules' && <RulesTab rules={categorizationRules} onCreateRule={handleCreateRule} onDeleteRule={handleDeleteRule} onUpdateRule={handleUpdateRule} transactions={transactions} onApplyRules={handleApplyRulesToExisting} loading={loading} categories={allCategories} customCategories={customCategories} onCreateCategory={handleCreateCategory} onDeleteCategory={handleDeleteCategory} onMigrateAndDeleteCategory={handleMigrateAndDeleteCategory} onBulkUpdateRules={handleBulkUpdateRules} />}
         </main>
       </div>
@@ -4283,11 +4434,6 @@ export default function Dashboard() {
           onDeleteAll={deleteAllData}
           onClose={() => setShowManageDataModal(false)}
         />
-      )}
-
-      {/* Add Member Modal */}
-      {showAddMemberModal && (
-        <AddMemberModal onSave={handleAddMember} onClose={() => setShowAddMemberModal(false)} />
       )}
     </div>
   )
@@ -5162,55 +5308,6 @@ function ManageDataModal({
               </div>
             </>
           )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function AddMemberModal({ onSave, onClose }: { onSave: (name: string, role: string, baseSalary: number, beneficiaryAccount?: string) => void; onClose: () => void }) {
-  const [name, setName] = useState('')
-  const [role, setRole] = useState('')
-  const [baseSalary, setBaseSalary] = useState('')
-  const [beneficiaryAccount, setBeneficiaryAccount] = useState('')
-
-  const handleSave = () => {
-    if (!name || !role || !baseSalary) return
-    onSave(name, role, parseFloat(baseSalary), beneficiaryAccount || undefined)
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-sm">
-        <div className="p-5 border-b border-zinc-800 flex items-center justify-between">
-          <h3 className="font-semibold">Add Team Member</h3>
-          <button onClick={onClose} className="p-2 hover:bg-zinc-800 rounded-lg"><X className="w-5 h-5 text-zinc-400" /></button>
-        </div>
-        <div className="p-5 space-y-4">
-          <div>
-            <label className="block text-zinc-400 text-sm mb-2">Name</label>
-            <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="John Doe" className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 focus:outline-none focus:border-emerald-500" />
-          </div>
-          <div>
-            <label className="block text-zinc-400 text-sm mb-2">Role</label>
-            <input type="text" value={role} onChange={(e) => setRole(e.target.value)} placeholder="Developer, Media Buyer..." className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 focus:outline-none focus:border-emerald-500" />
-          </div>
-          <div>
-            <label className="block text-zinc-400 text-sm mb-2">Base Salary (USD)</label>
-            <div className="relative">
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500">$</span>
-              <input type="number" value={baseSalary} onChange={(e) => setBaseSalary(e.target.value)} placeholder="0" className="w-full bg-zinc-800 border border-zinc-700 rounded-xl pl-9 pr-4 py-3 focus:outline-none focus:border-emerald-500" />
-            </div>
-          </div>
-          <div>
-            <label className="block text-zinc-400 text-sm mb-2">Beneficiary Account <span className="text-zinc-600">(optional)</span></label>
-            <input type="text" value={beneficiaryAccount} onChange={(e) => setBeneficiaryAccount(e.target.value)} placeholder="For auto-matching payments" className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 focus:outline-none focus:border-emerald-500" />
-            <p className="text-zinc-600 text-xs mt-1">Account number from Revolut transfers</p>
-          </div>
-        </div>
-        <div className="p-5 border-t border-zinc-800 flex gap-3">
-          <button onClick={onClose} className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-medium">Cancel</button>
-          <button onClick={handleSave} disabled={!name || !role || !baseSalary} className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 disabled:bg-zinc-700 disabled:text-zinc-500 text-black font-semibold rounded-xl transition-colors">Add Member</button>
         </div>
       </div>
     </div>
