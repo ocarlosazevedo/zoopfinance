@@ -1607,29 +1607,75 @@ export default function Dashboard() {
   ]
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen flex">
+      {/* Background */}
       <div className="fixed inset-0 bg-gradient-to-br from-zinc-950 via-zinc-900 to-zinc-950" />
       <div className="fixed inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-emerald-900/20 via-transparent to-transparent" />
-      <div className="relative z-10">
-        <header className="border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-xl sticky top-0 z-50">
-          <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center font-bold text-xl">Z</div>
-              <span className="text-xl font-bold">Zoop Finance</span>
+      
+      {/* Sidebar */}
+      <aside className="fixed left-0 top-0 bottom-0 w-64 bg-zinc-950/80 backdrop-blur-xl border-r border-zinc-800 z-40 flex flex-col">
+        {/* Logo */}
+        <div className="p-5 border-b border-zinc-800">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center font-bold text-xl">Z</div>
+            <span className="text-xl font-bold">Zoop Finance</span>
+          </div>
+        </div>
+
+        {/* Navigation */}
+        <nav className="flex-1 p-4 space-y-1">
+          <p className="text-xs text-zinc-500 uppercase tracking-wider px-3 mb-3">Menu</p>
+          {tabs.map((tab) => (
+            <button 
+              key={tab.id} 
+              onClick={() => setActiveTab(tab.id)} 
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                activeTab === tab.id 
+                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' 
+                  : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
+              }`}
+            >
+              <tab.icon className="w-5 h-5" />
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+
+        {/* Sidebar Footer */}
+        <div className="p-4 border-t border-zinc-800 space-y-2">
+          <button 
+            onClick={() => setShowManageDataModal(true)} 
+            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-zinc-400 hover:text-white hover:bg-zinc-800/50 transition-colors"
+          >
+            <Calendar className="w-5 h-5" />
+            Manage Data
+          </button>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+      <div className="flex-1 ml-64 relative z-10">
+        {/* Top Bar */}
+        <header className="sticky top-0 z-30 bg-zinc-950/80 backdrop-blur-xl border-b border-zinc-800">
+          <div className="px-6 py-4 flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div>
+                <h1 className="text-xl font-bold">{getPeriodLabel()}</h1>
+                <p className="text-zinc-500 text-sm">
+                  {loading ? 'Loading...' : filteredTransactions.length > 0 
+                    ? `${filteredTransactions.length} transactions • ${formatCurrency(aggregatedData.profit)} profit`
+                    : 'No data for this period'
+                  }
+                </p>
+              </div>
               {(loading || saving) && (
                 <div className="flex items-center gap-2 text-zinc-500 text-sm">
                   <div className="w-4 h-4 border-2 border-zinc-600 border-t-emerald-500 rounded-full animate-spin" />
-                  {saving ? 'Saving...' : 'Loading...'}
+                  {saving ? 'Saving...' : ''}
                 </div>
               )}
             </div>
             <div className="flex items-center gap-3">
-              <button 
-                onClick={() => setShowManageDataModal(true)} 
-                className="text-zinc-400 hover:text-white px-3 py-2 rounded-lg hover:bg-zinc-800 transition-colors text-sm"
-              >
-                Manage Data
-              </button>
               <PeriodSelector selectedYear={selectedYear} setSelectedYear={setSelectedYear} selectedMonths={selectedMonths} setSelectedMonths={setSelectedMonths} />
               <button onClick={() => setShowUploadModal(true)} className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-black font-medium px-4 py-2.5 rounded-xl transition-colors">
                 <Upload className="w-5 h-5" />Upload
@@ -1637,25 +1683,9 @@ export default function Dashboard() {
             </div>
           </div>
         </header>
-        <main className="max-w-7xl mx-auto px-6 py-6">
-          <div className="flex items-center justify-between mb-6">
-            <div>
-              <h1 className="text-2xl font-bold">{getPeriodLabel()}</h1>
-              <p className="text-zinc-500 mt-1">
-                {filteredTransactions.length > 0 
-                  ? `${filteredTransactions.length} transactions • ${formatCurrency(aggregatedData.profit)} profit`
-                  : 'No data for this period'
-                }
-              </p>
-            </div>
-            <div className="flex items-center bg-zinc-800 rounded-xl p-1">
-              {tabs.map((tab) => (
-                <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === tab.id ? 'bg-emerald-500 text-black' : 'text-zinc-400 hover:text-white'}`}>
-                  <tab.icon className="w-4 h-4" />{tab.label}
-                </button>
-              ))}
-            </div>
-          </div>
+
+        {/* Page Content */}
+        <main className="p-6">
           {activeTab === 'overview' && <OverviewTab data={aggregatedData} transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} loading={loading} />}
           {activeTab === 'transactions' && <TransactionsTab transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} selectedYear={selectedYear} selectedMonths={selectedMonths} loading={loading} />}
           {activeTab === 'payroll' && <PayrollTab teamMembers={teamMembers} currentMonth={getPayrollMonth()} onUpdateVariable={handleUpdateVariable} onAddMember={() => setShowAddMemberModal(true)} loading={loading} />}
