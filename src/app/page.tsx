@@ -593,12 +593,11 @@ function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths 
     if (filterType !== 'all' && t.type !== filterType) return false
     if (filterCategory !== 'all' && t.category !== filterCategory) return false
     
-    // Date filter within selected month
-    if (filterDateFrom !== null || filterDateTo !== null) {
+    // Date filter within selected month - only apply when range is complete
+    if (filterDateFrom !== null && filterDateTo !== null) {
       const txDate = new Date(t.date)
       const txDay = txDate.getDate()
-      if (filterDateFrom !== null && txDay < filterDateFrom) return false
-      if (filterDateTo !== null && txDay > filterDateTo) return false
+      if (txDay < filterDateFrom || txDay > filterDateTo) return false
     }
     
     if (search && !t.description.toLowerCase().includes(search.toLowerCase())) return false
@@ -671,18 +670,18 @@ function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths 
     setSearch('')
   }
 
-  const hasActiveFilters = filterType !== 'all' || filterCategory !== 'all' || filterDateFrom !== null || filterDateTo !== null || search
-  const hasDateFilter = filterDateFrom !== null || filterDateTo !== null
+  const hasActiveFilters = filterType !== 'all' || filterCategory !== 'all' || (filterDateFrom !== null && filterDateTo !== null) || search
+  const hasDateFilter = filterDateFrom !== null && filterDateTo !== null // Only active when range is complete
 
   // Date filter display text
   const getDateFilterText = () => {
     if (filterDateFrom === null && filterDateTo === null) return 'All Dates'
+    if (filterDateFrom !== null && filterDateTo === null) return `${monthNamesShort[currentMonth]} ${filterDateFrom}...`
     if (filterDateFrom !== null && filterDateTo !== null) {
       if (filterDateFrom === filterDateTo) return `${monthNamesShort[currentMonth]} ${filterDateFrom}`
       return `${monthNamesShort[currentMonth]} ${filterDateFrom}-${filterDateTo}`
     }
-    if (filterDateFrom !== null) return `From ${monthNamesShort[currentMonth]} ${filterDateFrom}`
-    return `Until ${monthNamesShort[currentMonth]} ${filterDateTo}`
+    return 'All Dates'
   }
 
   if (transactions.length === 0) {
@@ -834,17 +833,19 @@ function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths 
                                        day >= filterDateFrom && day <= filterDateTo
                       const isStart = filterDateFrom === day
                       const isEnd = filterDateTo === day
+                      const isSingleDay = filterDateFrom === filterDateTo && filterDateFrom === day
                       
                       return (
                         <button
                           key={day}
                           onClick={() => {
-                            if (filterDateFrom === null || (filterDateFrom !== null && filterDateTo !== null)) {
-                              // Start new selection
+                            // If no selection or already have a complete range (different days), start fresh
+                            if (filterDateFrom === null || (filterDateFrom !== null && filterDateTo !== null && filterDateFrom !== filterDateTo)) {
+                              // Start new selection - only set From, leave To as null temporarily
                               setFilterDateFrom(day)
-                              setFilterDateTo(day)
+                              setFilterDateTo(null)
                             } else {
-                              // Complete selection
+                              // Complete selection (we have From but no To, or From === To)
                               if (day < filterDateFrom) {
                                 setFilterDateTo(filterDateFrom)
                                 setFilterDateFrom(day)
@@ -855,8 +856,10 @@ function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths 
                           }}
                           className={`
                             p-2 text-xs rounded-md transition-colors
-                            ${isInRange ? 'bg-emerald-500/20 text-emerald-400' : 'hover:bg-zinc-800 text-zinc-300'}
+                            ${isInRange && !isSingleDay ? 'bg-emerald-500/20 text-emerald-400' : ''}
                             ${isStart || isEnd ? 'bg-emerald-500 text-black font-semibold' : ''}
+                            ${!isInRange && !isStart && !isEnd ? 'hover:bg-zinc-800 text-zinc-300' : ''}
+                            ${filterDateFrom === day && filterDateTo === null ? 'bg-emerald-500 text-black font-semibold ring-2 ring-emerald-400' : ''}
                           `}
                         >
                           {day}
@@ -864,6 +867,9 @@ function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths 
                       )
                     })}
                   </div>
+                  {filterDateFrom !== null && filterDateTo === null && (
+                    <p className="text-xs text-emerald-400 mt-2 text-center">Click another day to complete range</p>
+                  )}
                 </div>
 
                 {/* Footer */}
