@@ -56,9 +56,10 @@ const monthsConfig = [
   { month: 'December', short: 'Dec' },
 ]
 
-// Current month index (0-11)
-const currentMonthIndex = new Date().getMonth()
-const currentYear = new Date().getFullYear()
+// Current month index (0-11) - use fixed value to avoid hydration mismatch
+// The actual current date is used inside components with useEffect
+const currentMonthIndex = 11 // December (will be updated client-side)
+const currentYear = 2025
 
 // ============================================
 // UTILITIES
@@ -470,6 +471,14 @@ function LoadingSkeleton() {
 // OVERVIEW TAB
 // ============================================
 function OverviewTab({ data, transactions, onUpload, loading }: { data: { income: number; expenses: number; profit: number }; transactions: Transaction[]; onUpload: () => void; loading: boolean }) {
+  // DEBUG: Log received transactions
+  const expenseTransactions = transactions.filter(t => t.type === 'expense')
+  const expenseSum = expenseTransactions.reduce((s, t) => s + Math.abs(t.amount), 0)
+  console.log('=== OVERVIEW TAB DEBUG ===')
+  console.log('Total transactions received:', transactions.length)
+  console.log('Expense transactions:', expenseTransactions.length)
+  console.log('Expense sum (calculated):', expenseSum.toFixed(2))
+  console.log('Expense sum (from data prop):', data.expenses.toFixed(2))
   const margin = data.income > 0 ? ((data.profit / data.income) * 100).toFixed(1) : '0'
   const hasData = data.income > 0 || data.expenses > 0
 
@@ -1661,7 +1670,7 @@ export default function Dashboard() {
       console.log(`Loaded ${allTransactions.length} transactions total`)
       
       if (allTransactions.length > 0) {
-        setTransactions(allTransactions.map(tx => ({
+        const mapped = allTransactions.map(tx => ({
           id: tx.id,
           date: tx.date,
           description: tx.description,
@@ -1681,7 +1690,17 @@ export default function Dashboard() {
           transactionType: tx.transaction_type || undefined,
           status: tx.status || undefined,
           balance: tx.balance ? parseFloat(tx.balance) : undefined
-        })))
+        }))
+        
+        // DEBUG LOGS
+        const expenses = mapped.filter(t => t.type === 'expense')
+        const expenseSum = expenses.reduce((s, t) => s + Math.abs(t.amount), 0)
+        console.log('=== LOAD DEBUG ===')
+        console.log('Expense transactions loaded:', expenses.length)
+        console.log('Expense sum:', expenseSum.toFixed(2))
+        console.log('Unique expense IDs:', new Set(expenses.map(t => t.id)).size)
+        
+        setTransactions(mapped)
       }
 
       // Load statements
@@ -1755,9 +1774,10 @@ export default function Dashboard() {
         balance: tx.balance || null
       }))
 
+      // Use upsert to handle duplicate IDs (re-imports)
       const { error: txError } = await supabase
         .from('transactions')
-        .insert(txToInsert as any)
+        .upsert(txToInsert as any, { onConflict: 'id' })
 
       if (txError) {
         console.error('Error saving transactions:', txError)
@@ -1842,6 +1862,14 @@ export default function Dashboard() {
       return tx.period === periodStr
     })
   })
+
+  // DEBUG: Log filtering
+  console.log('=== FILTER DEBUG ===')
+  console.log('Selected year:', selectedYear)
+  console.log('Selected months:', selectedMonths)
+  console.log('Total before filter:', transactions.length)
+  console.log('Total after filter:', filteredTransactions.length)
+  console.log('Unique periods in transactions:', [...new Set(transactions.map(t => t.period))])
 
   // Calculate aggregated data from FILTERED transactions
   const aggregatedData = filteredTransactions.reduce((acc, t) => {
@@ -2187,7 +2215,7 @@ function parseCSVLocally(csvContent: string, fileName: string, teamMembers: Team
       const amountInUSD = convertToUSD(amount, originalCurrency, exchangeRates)
       
       transactions.push({
-        id: `${Date.now()}-${i}-${Math.random().toString(36).substr(2, 6)}`,
+        id: crypto.randomUUID(),
         date,
         description,
         reference: reference || rawDesc,
@@ -2293,7 +2321,7 @@ function parseCSVLocally(csvContent: string, fileName: string, teamMembers: Team
       const amountInUSD = convertToUSD(amount, originalCurrency, exchangeRates)
       
       transactions.push({
-        id: `${Date.now()}-${i}-${Math.random().toString(36).substr(2, 6)}`,
+        id: crypto.randomUUID(),
         date,
         description,
         reference: reference || rawDesc,
@@ -2339,7 +2367,7 @@ function parseCSVLocally(csvContent: string, fileName: string, teamMembers: Team
       const amountInUSD = convertToUSD(amount, originalCurrency, exchangeRates)
       
       transactions.push({
-        id: `${Date.now()}-${i}-${Math.random().toString(36).substr(2, 6)}`,
+        id: crypto.randomUUID(),
         date,
         description,
         reference: rawDesc,
@@ -2449,6 +2477,15 @@ function UploadModal({ onClose, onUploadComplete, teamMembers }: { onClose: () =
       setFiles(prev => [...prev, ...droppedFiles])
       setError(null)
       setAnalysisResult(null)
+      
+      // Auto-detect period from filename (e.g., Relay_2025-11-01 → November 2025)
+      const firstFile = droppedFiles[0]
+      const dateMatch = firstFile.name.match(/(\d{4})-(\d{2})-\d{2}/)
+      if (dateMatch) {
+        const [_, year, month] = dateMatch
+        setSelectedYear(parseInt(year))
+        setSelectedMonth(parseInt(month) - 1) // 0-indexed
+      }
     } else {
       setError('Please upload CSV files')
     }
@@ -2460,6 +2497,15 @@ function UploadModal({ onClose, onUploadComplete, teamMembers }: { onClose: () =
       setFiles(prev => [...prev, ...selectedFiles])
       setError(null)
       setAnalysisResult(null)
+      
+      // Auto-detect period from filename (e.g., Relay_2025-11-01 → November 2025)
+      const firstFile = selectedFiles[0]
+      const dateMatch = firstFile.name.match(/(\d{4})-(\d{2})-\d{2}/)
+      if (dateMatch) {
+        const [_, year, month] = dateMatch
+        setSelectedYear(parseInt(year))
+        setSelectedMonth(parseInt(month) - 1) // 0-indexed
+      }
     }
   }
 
@@ -2502,8 +2548,26 @@ function UploadModal({ onClose, onUploadComplete, teamMembers }: { onClose: () =
       }
 
       // Calculate summary (all amounts now in USD)
-      const income = allTransactions.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0)
-      const expenses = allTransactions.filter(t => t.type === 'expense').reduce((s, t) => s + Math.abs(t.amount), 0)
+      const incomeTransactions = allTransactions.filter(t => t.type === 'income')
+      const expenseTransactions = allTransactions.filter(t => t.type === 'expense')
+      const internalTransactions = allTransactions.filter(t => t.type === 'internal')
+      
+      const income = incomeTransactions.reduce((s, t) => s + t.amount, 0)
+      const expenses = expenseTransactions.reduce((s, t) => s + Math.abs(t.amount), 0)
+      
+      // DEBUG LOGS
+      console.log('=== PARSE DEBUG ===')
+      console.log('Total transactions:', allTransactions.length)
+      console.log('Income transactions:', incomeTransactions.length, '- Total:', income.toFixed(2))
+      console.log('Expense transactions:', expenseTransactions.length, '- Total:', expenses.toFixed(2))
+      console.log('Internal transactions:', internalTransactions.length)
+      console.log('Unique IDs:', new Set(allTransactions.map(t => t.id)).size)
+      
+      // Log sample expenses
+      console.log('Sample expenses (first 5):')
+      expenseTransactions.slice(0, 5).forEach(t => {
+        console.log(`  ${t.id} | ${t.amount} | ${t.description}`)
+      })
       
       setAnalysisResult({
         transactions: allTransactions,
