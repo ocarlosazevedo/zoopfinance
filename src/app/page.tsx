@@ -566,23 +566,41 @@ function OverviewTab({ data, transactions, onUpload }: { data: { income: number;
 // ============================================
 // TRANSACTIONS TAB
 // ============================================
-function TransactionsTab({ transactions, onUpload }: { transactions: Transaction[]; onUpload: () => void }) {
+function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths }: { 
+  transactions: Transaction[]
+  onUpload: () => void
+  selectedYear: number
+  selectedMonths: number[]
+}) {
   const [filterType, setFilterType] = useState('all')
   const [filterCategory, setFilterCategory] = useState('all')
-  const [filterDateFrom, setFilterDateFrom] = useState('')
-  const [filterDateTo, setFilterDateTo] = useState('')
+  const [filterDateFrom, setFilterDateFrom] = useState<number | null>(null)
+  const [filterDateTo, setFilterDateTo] = useState<number | null>(null)
   const [search, setSearch] = useState('')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null)
+  const [showDateFilter, setShowDateFilter] = useState(false)
 
   // Get unique categories from transactions
   const categories = [...new Set(transactions.map(t => t.category).filter(Boolean))].sort()
 
+  // Get the current period month info
+  const monthNamesShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const currentMonth = selectedMonths.length === 1 ? selectedMonths[0] : new Date().getMonth()
+  const daysInMonth = new Date(selectedYear, currentMonth + 1, 0).getDate()
+
   const filtered = transactions.filter(t => {
     if (filterType !== 'all' && t.type !== filterType) return false
     if (filterCategory !== 'all' && t.category !== filterCategory) return false
-    if (filterDateFrom && t.date < filterDateFrom) return false
-    if (filterDateTo && t.date > filterDateTo) return false
+    
+    // Date filter within selected month
+    if (filterDateFrom !== null || filterDateTo !== null) {
+      const txDate = new Date(t.date)
+      const txDay = txDate.getDate()
+      if (filterDateFrom !== null && txDay < filterDateFrom) return false
+      if (filterDateTo !== null && txDay > filterDateTo) return false
+    }
+    
     if (search && !t.description.toLowerCase().includes(search.toLowerCase())) return false
     return true
   })
@@ -648,12 +666,24 @@ function TransactionsTab({ transactions, onUpload }: { transactions: Transaction
   const clearFilters = () => {
     setFilterType('all')
     setFilterCategory('all')
-    setFilterDateFrom('')
-    setFilterDateTo('')
+    setFilterDateFrom(null)
+    setFilterDateTo(null)
     setSearch('')
   }
 
-  const hasActiveFilters = filterType !== 'all' || filterCategory !== 'all' || filterDateFrom || filterDateTo || search
+  const hasActiveFilters = filterType !== 'all' || filterCategory !== 'all' || filterDateFrom !== null || filterDateTo !== null || search
+  const hasDateFilter = filterDateFrom !== null || filterDateTo !== null
+
+  // Date filter display text
+  const getDateFilterText = () => {
+    if (filterDateFrom === null && filterDateTo === null) return 'All Dates'
+    if (filterDateFrom !== null && filterDateTo !== null) {
+      if (filterDateFrom === filterDateTo) return `${monthNamesShort[currentMonth]} ${filterDateFrom}`
+      return `${monthNamesShort[currentMonth]} ${filterDateFrom}-${filterDateTo}`
+    }
+    if (filterDateFrom !== null) return `From ${monthNamesShort[currentMonth]} ${filterDateFrom}`
+    return `Until ${monthNamesShort[currentMonth]} ${filterDateTo}`
+  }
 
   if (transactions.length === 0) {
     return (
@@ -693,63 +723,177 @@ function TransactionsTab({ transactions, onUpload }: { transactions: Transaction
         </div>
       </div>
 
-      {/* Filters */}
-      <div className="bg-zinc-800/50 border border-zinc-700 rounded-xl p-4 space-y-4">
-        <div className="flex flex-col lg:flex-row gap-4">
-          <input
-            type="text"
-            placeholder="Search transactions..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-2.5 focus:outline-none focus:border-zinc-600"
-          />
-          <select
-            value={filterType}
-            onChange={(e) => setFilterType(e.target.value)}
-            className="bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-2.5 focus:outline-none cursor-pointer min-w-[140px]"
+      {/* Compact Filters Row */}
+      <div className="flex flex-wrap items-center gap-3">
+        <input
+          type="text"
+          placeholder="Search..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="flex-1 min-w-[200px] bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 focus:outline-none focus:border-zinc-600 text-sm"
+        />
+        
+        <select
+          value={filterType}
+          onChange={(e) => setFilterType(e.target.value)}
+          className="bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 focus:outline-none cursor-pointer text-sm"
+        >
+          <option value="all">All Types</option>
+          <option value="income">Income</option>
+          <option value="expense">Expenses</option>
+          <option value="internal">Internal</option>
+        </select>
+        
+        <select
+          value={filterCategory}
+          onChange={(e) => setFilterCategory(e.target.value)}
+          className="bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 focus:outline-none cursor-pointer text-sm"
+        >
+          <option value="all">All Categories</option>
+          {categories.map(cat => (
+            <option key={cat} value={cat}>{cat}</option>
+          ))}
+        </select>
+
+        {/* Date Filter Dropdown */}
+        <div className="relative">
+          <button
+            onClick={() => setShowDateFilter(!showDateFilter)}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border text-sm transition-colors ${
+              hasDateFilter 
+                ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400' 
+                : 'bg-zinc-800 border-zinc-700 text-white hover:border-zinc-600'
+            }`}
           >
-            <option value="all">All Types</option>
-            <option value="income">Income</option>
-            <option value="expense">Expenses</option>
-            <option value="internal">Internal</option>
-          </select>
-          <select
-            value={filterCategory}
-            onChange={(e) => setFilterCategory(e.target.value)}
-            className="bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-2.5 focus:outline-none cursor-pointer min-w-[140px]"
-          >
-            <option value="all">All Categories</option>
-            {categories.map(cat => (
-              <option key={cat} value={cat}>{cat}</option>
-            ))}
-          </select>
-        </div>
-        <div className="flex flex-col sm:flex-row gap-4 items-end">
-          <div className="flex-1 min-w-[160px]">
-            <DatePicker
-              value={filterDateFrom}
-              onChange={setFilterDateFrom}
-              placeholder="From date"
-              label="From"
-            />
-          </div>
-          <div className="flex-1 min-w-[160px]">
-            <DatePicker
-              value={filterDateTo}
-              onChange={setFilterDateTo}
-              placeholder="To date"
-              label="To"
-            />
-          </div>
-          {hasActiveFilters && (
-            <button
-              onClick={clearFilters}
-              className="px-4 py-2.5 text-zinc-400 hover:text-white hover:bg-zinc-700 rounded-lg transition-colors text-sm whitespace-nowrap"
-            >
-              Clear Filters
-            </button>
+            <Calendar className="w-4 h-4" />
+            <span>{getDateFilterText()}</span>
+            <ChevronDown className={`w-4 h-4 transition-transform ${showDateFilter ? 'rotate-180' : ''}`} />
+          </button>
+
+          {showDateFilter && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setShowDateFilter(false)} />
+              <div className="absolute top-full right-0 mt-2 w-72 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl z-50 overflow-hidden">
+                {/* Header */}
+                <div className="p-3 border-b border-zinc-800">
+                  <p className="text-sm font-medium text-center">
+                    {monthNamesShort[currentMonth]} {selectedYear}
+                  </p>
+                </div>
+
+                {/* Quick Filters */}
+                <div className="p-3 border-b border-zinc-800 flex flex-wrap gap-2">
+                  <button
+                    onClick={() => { setFilterDateFrom(null); setFilterDateTo(null); }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      !hasDateFilter ? 'bg-emerald-500 text-black' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
+                    }`}
+                  >
+                    All
+                  </button>
+                  <button
+                    onClick={() => { setFilterDateFrom(1); setFilterDateTo(7); }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      filterDateFrom === 1 && filterDateTo === 7 ? 'bg-emerald-500 text-black' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
+                    }`}
+                  >
+                    Week 1
+                  </button>
+                  <button
+                    onClick={() => { setFilterDateFrom(8); setFilterDateTo(14); }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      filterDateFrom === 8 && filterDateTo === 14 ? 'bg-emerald-500 text-black' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
+                    }`}
+                  >
+                    Week 2
+                  </button>
+                  <button
+                    onClick={() => { setFilterDateFrom(15); setFilterDateTo(21); }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      filterDateFrom === 15 && filterDateTo === 21 ? 'bg-emerald-500 text-black' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
+                    }`}
+                  >
+                    Week 3
+                  </button>
+                  <button
+                    onClick={() => { setFilterDateFrom(22); setFilterDateTo(daysInMonth); }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      filterDateFrom === 22 && filterDateTo === daysInMonth ? 'bg-emerald-500 text-black' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
+                    }`}
+                  >
+                    Week 4+
+                  </button>
+                </div>
+
+                {/* Day Grid */}
+                <div className="p-3">
+                  <p className="text-xs text-zinc-500 mb-2">Select day range:</p>
+                  <div className="grid grid-cols-7 gap-1">
+                    {Array.from({ length: daysInMonth }, (_, i) => i + 1).map(day => {
+                      const isInRange = filterDateFrom !== null && filterDateTo !== null && 
+                                       day >= filterDateFrom && day <= filterDateTo
+                      const isStart = filterDateFrom === day
+                      const isEnd = filterDateTo === day
+                      
+                      return (
+                        <button
+                          key={day}
+                          onClick={() => {
+                            if (filterDateFrom === null || (filterDateFrom !== null && filterDateTo !== null)) {
+                              // Start new selection
+                              setFilterDateFrom(day)
+                              setFilterDateTo(day)
+                            } else {
+                              // Complete selection
+                              if (day < filterDateFrom) {
+                                setFilterDateTo(filterDateFrom)
+                                setFilterDateFrom(day)
+                              } else {
+                                setFilterDateTo(day)
+                              }
+                            }
+                          }}
+                          className={`
+                            p-2 text-xs rounded-md transition-colors
+                            ${isInRange ? 'bg-emerald-500/20 text-emerald-400' : 'hover:bg-zinc-800 text-zinc-300'}
+                            ${isStart || isEnd ? 'bg-emerald-500 text-black font-semibold' : ''}
+                          `}
+                        >
+                          {day}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {/* Footer */}
+                <div className="p-3 border-t border-zinc-800 flex gap-2">
+                  <button
+                    onClick={() => { setFilterDateFrom(null); setFilterDateTo(null); }}
+                    className="flex-1 py-2 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-lg text-sm transition-colors"
+                  >
+                    Clear
+                  </button>
+                  <button
+                    onClick={() => setShowDateFilter(false)}
+                    className="flex-1 py-2 bg-emerald-500 hover:bg-emerald-400 text-black font-medium rounded-lg text-sm transition-colors"
+                  >
+                    Apply
+                  </button>
+                </div>
+              </div>
+            </>
           )}
         </div>
+
+        {hasActiveFilters && (
+          <button
+            onClick={clearFilters}
+            className="px-3 py-2.5 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-xl transition-colors text-sm"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       {/* Selection Actions */}
@@ -1429,7 +1573,7 @@ export default function Dashboard() {
             </div>
           </div>
           {activeTab === 'overview' && <OverviewTab data={aggregatedData} transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} />}
-          {activeTab === 'transactions' && <TransactionsTab transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} />}
+          {activeTab === 'transactions' && <TransactionsTab transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} selectedYear={selectedYear} selectedMonths={selectedMonths} />}
           {activeTab === 'payroll' && <PayrollTab teamMembers={teamMembers} currentMonth={getPayrollMonth()} onUpdateVariable={handleUpdateVariable} onAddMember={() => setShowAddMemberModal(true)} />}
         </main>
       </div>
