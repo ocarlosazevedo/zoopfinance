@@ -30,6 +30,12 @@ type Transaction = {
   originalAmount?: number  // Original amount before conversion
   originalCurrency?: string // Original currency (EUR, GBP, BRL, etc)
   period?: string
+  // Extended fields from CSV
+  payee?: string           // Payee name (Relay) or counterpart
+  accountNumber?: string   // Account # (Relay sub-account)
+  transactionType?: string // Original type: Receive-transfer, Spend, CARD_PAYMENT, etc
+  status?: string          // SETTLED, PENDING, COMPLETED, etc
+  balance?: number         // Balance after transaction
 }
 
 // ============================================
@@ -1049,8 +1055,8 @@ function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths,
 function TransactionDetailModal({ transaction: tx, onClose }: { transaction: Transaction; onClose: () => void }) {
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-lg" onClick={e => e.stopPropagation()}>
-        <div className="p-5 border-b border-zinc-800 flex items-center justify-between">
+      <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="p-5 border-b border-zinc-800 flex items-center justify-between sticky top-0 bg-zinc-900 z-10">
           <div>
             <h3 className="font-semibold text-lg">{tx.description}</h3>
             <p className="text-zinc-500 text-sm">{tx.bank} • {tx.date}</p>
@@ -1062,7 +1068,7 @@ function TransactionDetailModal({ transaction: tx, onClose }: { transaction: Tra
         
         <div className="p-5 space-y-4">
           {/* Amount */}
-          <div className="text-center py-4">
+          <div className="text-center py-4 bg-zinc-800/30 rounded-xl">
             <p className={`text-3xl font-bold ${tx.type === 'income' ? 'text-emerald-400' : tx.type === 'expense' ? 'text-red-400' : 'text-blue-400'}`}>
               {tx.amount > 0 ? '+' : ''}{formatCurrency(tx.amount)}
             </p>
@@ -1071,52 +1077,109 @@ function TransactionDetailModal({ transaction: tx, onClose }: { transaction: Tra
                 Original: {new Intl.NumberFormat('en-US', { style: 'currency', currency: tx.originalCurrency }).format(Math.abs(tx.originalAmount || 0))} {tx.originalCurrency}
               </p>
             )}
+            {tx.balance !== undefined && (
+              <p className="text-zinc-500 text-sm mt-2">
+                Balance after: {formatCurrency(tx.balance)}
+              </p>
+            )}
           </div>
 
-          {/* Details Grid */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="bg-zinc-800/50 rounded-lg p-3">
-              <p className="text-zinc-500 text-xs mb-1">Type</p>
-              <p className="font-medium capitalize">{tx.type}</p>
+          {/* Classification */}
+          <div>
+            <p className="text-xs text-zinc-500 uppercase tracking-wider mb-2">Classification</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-zinc-800/50 rounded-lg p-3">
+                <p className="text-zinc-500 text-xs mb-1">Type</p>
+                <p className="font-medium capitalize">{tx.type}</p>
+              </div>
+              <div className="bg-zinc-800/50 rounded-lg p-3">
+                <p className="text-zinc-500 text-xs mb-1">Category</p>
+                <p className="font-medium">{tx.category || 'Uncategorized'}</p>
+              </div>
             </div>
-            <div className="bg-zinc-800/50 rounded-lg p-3">
-              <p className="text-zinc-500 text-xs mb-1">Category</p>
-              <p className="font-medium">{tx.category || 'Uncategorized'}</p>
+          </div>
+
+          {/* Source Details */}
+          <div>
+            <p className="text-xs text-zinc-500 uppercase tracking-wider mb-2">Source Details</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-zinc-800/50 rounded-lg p-3">
+                <p className="text-zinc-500 text-xs mb-1">Bank</p>
+                <p className="font-medium">{tx.bank}</p>
+              </div>
+              <div className="bg-zinc-800/50 rounded-lg p-3">
+                <p className="text-zinc-500 text-xs mb-1">Currency</p>
+                <p className="font-medium">{tx.account || tx.currency || 'USD'}</p>
+              </div>
+              {tx.accountNumber && (
+                <div className="bg-zinc-800/50 rounded-lg p-3">
+                  <p className="text-zinc-500 text-xs mb-1">Account #</p>
+                  <p className="font-medium font-mono">{tx.accountNumber}</p>
+                </div>
+              )}
+              {tx.transactionType && (
+                <div className="bg-zinc-800/50 rounded-lg p-3">
+                  <p className="text-zinc-500 text-xs mb-1">Transaction Type</p>
+                  <p className="font-medium">{tx.transactionType}</p>
+                </div>
+              )}
+              {tx.status && (
+                <div className="bg-zinc-800/50 rounded-lg p-3">
+                  <p className="text-zinc-500 text-xs mb-1">Status</p>
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                    tx.status.toUpperCase() === 'SETTLED' || tx.status.toUpperCase() === 'COMPLETED' 
+                      ? 'bg-emerald-500/20 text-emerald-400' 
+                      : 'bg-amber-500/20 text-amber-400'
+                  }`}>
+                    {tx.status}
+                  </span>
+                </div>
+              )}
+              {tx.payee && (
+                <div className="bg-zinc-800/50 rounded-lg p-3 col-span-2">
+                  <p className="text-zinc-500 text-xs mb-1">Payee / Counterpart</p>
+                  <p className="font-medium">{tx.payee}</p>
+                </div>
+              )}
             </div>
-            <div className="bg-zinc-800/50 rounded-lg p-3">
-              <p className="text-zinc-500 text-xs mb-1">Bank</p>
-              <p className="font-medium">{tx.bank}</p>
-            </div>
-            <div className="bg-zinc-800/50 rounded-lg p-3">
-              <p className="text-zinc-500 text-xs mb-1">Account</p>
-              <p className="font-medium">{tx.account || '-'}</p>
-            </div>
-            <div className="bg-zinc-800/50 rounded-lg p-3">
-              <p className="text-zinc-500 text-xs mb-1">Date</p>
-              <p className="font-medium">{new Date(tx.date).toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}</p>
-            </div>
-            <div className="bg-zinc-800/50 rounded-lg p-3">
-              <p className="text-zinc-500 text-xs mb-1">Period</p>
-              <p className="font-medium">{tx.period || '-'}</p>
+          </div>
+
+          {/* Date & Period */}
+          <div>
+            <p className="text-xs text-zinc-500 uppercase tracking-wider mb-2">Date & Period</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-zinc-800/50 rounded-lg p-3">
+                <p className="text-zinc-500 text-xs mb-1">Date</p>
+                <p className="font-medium">{new Date(tx.date).toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}</p>
+              </div>
+              <div className="bg-zinc-800/50 rounded-lg p-3">
+                <p className="text-zinc-500 text-xs mb-1">Period</p>
+                <p className="font-medium">{tx.period || '-'}</p>
+              </div>
             </div>
           </div>
 
           {/* Reference */}
           {tx.reference && (
-            <div className="bg-zinc-800/50 rounded-lg p-3">
-              <p className="text-zinc-500 text-xs mb-1">Reference / Notes</p>
-              <p className="text-sm text-zinc-300 break-words">{tx.reference}</p>
+            <div>
+              <p className="text-xs text-zinc-500 uppercase tracking-wider mb-2">Reference / Notes</p>
+              <div className="bg-zinc-800/50 rounded-lg p-3">
+                <p className="text-sm text-zinc-300 break-words">{tx.reference}</p>
+              </div>
             </div>
           )}
 
           {/* Transaction ID */}
-          <div className="bg-zinc-800/50 rounded-lg p-3">
-            <p className="text-zinc-500 text-xs mb-1">Transaction ID</p>
-            <p className="text-xs text-zinc-500 font-mono break-all">{tx.id}</p>
+          <div>
+            <p className="text-xs text-zinc-500 uppercase tracking-wider mb-2">System</p>
+            <div className="bg-zinc-800/50 rounded-lg p-3">
+              <p className="text-zinc-500 text-xs mb-1">Transaction ID</p>
+              <p className="text-xs text-zinc-500 font-mono break-all">{tx.id}</p>
+            </div>
           </div>
         </div>
 
-        <div className="p-5 border-t border-zinc-800">
+        <div className="p-5 border-t border-zinc-800 sticky bottom-0 bg-zinc-900">
           <button
             onClick={onClose}
             className="w-full py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-medium transition-colors"
@@ -1384,7 +1447,13 @@ export default function Dashboard() {
           currency: tx.currency || 'USD',
           originalAmount: tx.original_amount ? parseFloat(tx.original_amount) : undefined,
           originalCurrency: tx.original_currency || undefined,
-          period: tx.period
+          period: tx.period,
+          // Extended fields
+          payee: tx.payee || undefined,
+          accountNumber: tx.account_number || undefined,
+          transactionType: tx.transaction_type || undefined,
+          status: tx.status || undefined,
+          balance: tx.balance ? parseFloat(tx.balance) : undefined
         })))
       }
 
@@ -1450,7 +1519,13 @@ export default function Dashboard() {
         currency: tx.currency,
         original_amount: tx.originalAmount || null,
         original_currency: tx.originalCurrency || null,
-        period: tx.period || period
+        period: tx.period || period,
+        // Extended fields
+        payee: tx.payee || null,
+        account_number: tx.accountNumber || null,
+        transaction_type: tx.transactionType || null,
+        status: tx.status || null,
+        balance: tx.balance || null
       }))
 
       const { error: txError } = await supabase
@@ -1819,11 +1894,14 @@ function parseCSVLocally(csvContent: string, fileName: string, teamMembers: Team
     // Relay format: Date,Payee,Account #,Transaction Type,Description,Reference,Status,Amount,Currency,Balance
     const dateIdx = headers.indexOf('date')
     const payeeIdx = headers.indexOf('payee')
+    const accountNumIdx = headers.indexOf('account #')
     const txTypeIdx = headers.indexOf('transaction type')
     const descIdx = headers.indexOf('description')
     const refIdx = headers.indexOf('reference')
+    const statusIdx = headers.indexOf('status')
     const amountIdx = headers.indexOf('amount')
     const currencyIdx = headers.indexOf('currency')
+    const balanceIdx = headers.indexOf('balance')
     
     for (let i = 1; i < lines.length; i++) {
       const values = parseCSVLine(lines[i])
@@ -1834,9 +1912,13 @@ function parseCSVLocally(csvContent: string, fileName: string, teamMembers: Team
       if (amount === 0) continue
       
       const payee = values[payeeIdx] || ''
+      const accountNum = values[accountNumIdx] || ''
       const txType = values[txTypeIdx] || ''
       const rawDesc = values[descIdx] || ''
       const reference = values[refIdx] || ''
+      const status = values[statusIdx] || ''
+      const balanceStr = values[balanceIdx] || ''
+      const balance = parseFloat(balanceStr.replace(/[^0-9.-]/g, '')) || undefined
       
       // Description: use payee if description is "Unknown"
       const description = cleanDescription(rawDesc, payee)
@@ -1888,17 +1970,28 @@ function parseCSVLocally(csvContent: string, fileName: string, teamMembers: Team
         amount: amountInUSD,
         currency: 'USD',
         originalAmount: originalCurrency !== 'USD' ? amount : undefined,
-        originalCurrency: originalCurrency !== 'USD' ? originalCurrency : undefined
+        originalCurrency: originalCurrency !== 'USD' ? originalCurrency : undefined,
+        // Extended fields
+        payee: payee || undefined,
+        accountNumber: accountNum || undefined,
+        transactionType: txType || undefined,
+        status: status || undefined,
+        balance: balance
       })
     }
   } else if (isRevolut) {
-    // Revolut format: Date started,Date completed,ID,Type,State,Description,Reference,...,Amount,...,Beneficiary account number,...
+    // Revolut format: Date started,Date completed,ID,Type,State,Description,Reference,...,Amount,...,Beneficiary account number,Beneficiary name,...
     const dateIdx = headers.findIndex(h => h.includes('date completed') || h.includes('date started'))
+    const idIdx = headers.indexOf('id')
     const typeIdx = headers.indexOf('type')
+    const stateIdx = headers.indexOf('state')
     const descIdx = headers.indexOf('description')
+    const refIdx = headers.indexOf('reference')
     const amountIdx = headers.indexOf('amount')
     const currencyIdx = headers.indexOf('payment currency') !== -1 ? headers.indexOf('payment currency') : headers.indexOf('currency')
+    const balanceIdx = headers.indexOf('balance')
     const beneficiaryIdx = headers.indexOf('beneficiary account number')
+    const beneficiaryNameIdx = headers.indexOf('beneficiary name')
     
     for (let i = 1; i < lines.length; i++) {
       const values = parseCSVLine(lines[i])
@@ -1910,7 +2003,12 @@ function parseCSVLocally(csvContent: string, fileName: string, teamMembers: Team
       
       const revolut_type = (values[typeIdx] || '').toUpperCase()
       const rawDesc = values[descIdx] || ''
+      const reference = refIdx >= 0 ? values[refIdx] || '' : ''
+      const state = stateIdx >= 0 ? values[stateIdx] || '' : ''
       const beneficiaryAccount = beneficiaryIdx >= 0 ? values[beneficiaryIdx]?.trim() : ''
+      const beneficiaryName = beneficiaryNameIdx >= 0 ? values[beneficiaryNameIdx]?.trim() : ''
+      const balanceStr = balanceIdx >= 0 ? values[balanceIdx] || '' : ''
+      const balance = parseFloat(balanceStr.replace(/[^0-9.-]/g, '')) || undefined
       
       const description = cleanDescription(rawDesc, '')
       let category = detectCategory(rawDesc, '')
@@ -1970,7 +2068,7 @@ function parseCSVLocally(csvContent: string, fileName: string, teamMembers: Team
         id: `${Date.now()}-${i}-${Math.random().toString(36).substr(2, 6)}`,
         date,
         description,
-        reference: rawDesc,
+        reference: reference || rawDesc,
         bank: bankName,
         account: originalCurrency,
         type,
@@ -1978,7 +2076,13 @@ function parseCSVLocally(csvContent: string, fileName: string, teamMembers: Team
         amount: amountInUSD,
         currency: 'USD',
         originalAmount: originalCurrency !== 'USD' ? amount : undefined,
-        originalCurrency: originalCurrency !== 'USD' ? originalCurrency : undefined
+        originalCurrency: originalCurrency !== 'USD' ? originalCurrency : undefined,
+        // Extended fields
+        payee: beneficiaryName || undefined,
+        accountNumber: beneficiaryAccount || undefined,
+        transactionType: revolut_type || undefined,
+        status: state || undefined,
+        balance: balance
       })
     }
   } else {
