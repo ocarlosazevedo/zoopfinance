@@ -526,12 +526,67 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
   const totalIncome = Object.values(incomeBySource).reduce((a, b) => a + b, 0)
   const incomeSourceSorted = Object.entries(incomeBySource).sort((a, b) => b[1] - a[1])
 
-  // Top vendors (grouped by payee/description)
+  // Normalize vendor names for grouping
+  const normalizeVendor = (name: string): string => {
+    const lower = name.toLowerCase().trim()
+    
+    // Google Ads variations
+    if (lower.includes('google') && (lower.includes('ads') || lower.includes('adwords'))) return 'Google Ads'
+    if (lower.match(/dl \*google/)) return 'Google Ads'
+    
+    // Facebook/Meta
+    if (lower.includes('facebook') || lower.includes('meta') || lower.includes('fb ')) return 'Facebook Ads'
+    
+    // TikTok
+    if (lower.includes('tiktok') || lower.includes('bytedance')) return 'TikTok Ads'
+    
+    // Shopify
+    if (lower.includes('shopify')) return 'Shopify'
+    
+    // Stripe
+    if (lower.includes('stripe')) return 'Stripe'
+    
+    // PayPal
+    if (lower.includes('paypal')) return 'PayPal'
+    
+    // Amazon
+    if (lower.includes('amazon') || lower.includes('aws')) return 'Amazon'
+    
+    // Clean up "Para XXX" pattern (Brazilian transfers)
+    if (lower.startsWith('para ')) {
+      // Extract first meaningful name part
+      const cleaned = name.substring(5).split(/\s+/).slice(0, 2).join(' ')
+      return cleaned || name
+    }
+    
+    // Clean up "To XXX" pattern
+    if (lower.startsWith('to ')) {
+      const cleaned = name.substring(3).split(/\s+/).slice(0, 2).join(' ')
+      return cleaned || name
+    }
+    
+    // Remove common prefixes/suffixes
+    let result = name
+      .replace(/^(dl \*|payment to |transfer to |pix para )/i, '')
+      .replace(/\d{6,}/g, '') // Remove long numbers
+      .replace(/\s+/g, ' ')
+      .trim()
+    
+    // Capitalize first letter of each word
+    result = result.split(' ')
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+      .join(' ')
+    
+    return result || name
+  }
+
+  // Top vendors (grouped by normalized payee/description)
   const vendorTotals = transactions
     .filter(t => t.type === 'expense')
     .reduce((acc, t) => {
       // Use payee if available, otherwise use description
-      const vendor = t.payee || t.description || 'Unknown'
+      const rawVendor = t.payee || t.description || 'Unknown'
+      const vendor = normalizeVendor(rawVendor)
       if (!acc[vendor]) {
         acc[vendor] = { total: 0, count: 0, category: t.category }
       }
