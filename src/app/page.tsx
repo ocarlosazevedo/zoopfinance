@@ -1322,12 +1322,15 @@ function OverviewTab({ data, transactions, onUpload, loading, categorizationRule
 // ============================================
 // TRANSACTIONS TAB
 // ============================================
-function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths, loading }: { 
+function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths, loading, allCategories, onUpdateTransaction, onBulkUpdateTransactions }: { 
   transactions: Transaction[]
   onUpload: () => void
   selectedYear: number
   selectedMonths: number[]
   loading: boolean
+  allCategories: { id: string; name: string; color: string }[]
+  onUpdateTransaction: (id: string, updates: { category?: string; type?: 'income' | 'expense' | 'internal' }) => Promise<boolean>
+  onBulkUpdateTransactions: (ids: string[], updates: { category?: string; type?: 'income' | 'expense' | 'internal' }) => Promise<boolean>
 }) {
   const [filterType, setFilterType] = useState('all')
   const [filterCategory, setFilterCategory] = useState('all')
@@ -1337,9 +1340,12 @@ function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths,
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null)
   const [showDateFilter, setShowDateFilter] = useState(false)
+  const [bulkCategory, setBulkCategory] = useState('')
+  const [bulkType, setBulkType] = useState('')
+  const [bulkProcessing, setBulkProcessing] = useState(false)
 
-  // Get unique categories from transactions
-  const categories = [...new Set(transactions.map(t => t.category).filter(Boolean))].sort()
+  // Use only active categories from allCategories
+  const categoryNames = allCategories.map(c => c.name)
 
   // Get the current period month info
   const monthNamesShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -1515,7 +1521,7 @@ function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths,
             className="bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 pr-10 focus:outline-none cursor-pointer text-sm appearance-none"
           >
             <option value="all">All Categories</option>
-            {categories.map(cat => (
+            {categoryNames.map(cat => (
               <option key={cat} value={cat}>{cat}</option>
             ))}
           </select>
@@ -1672,24 +1678,78 @@ function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths,
 
       {/* Selection Actions */}
       {selectedIds.size > 0 && (
-        <div className="flex items-center justify-between bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-4 py-3">
-          <span className="text-emerald-400 text-sm font-medium">
-            {selectedIds.size} transaction{selectedIds.size > 1 ? 's' : ''} selected
-          </span>
-          <div className="flex gap-2">
-            <button
-              onClick={() => setSelectedIds(new Set())}
-              className="px-3 py-1.5 text-zinc-400 hover:text-white text-sm rounded-lg hover:bg-zinc-800"
-            >
-              Clear
-            </button>
-            <button
-              onClick={exportCSV}
-              className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-black text-sm font-medium rounded-lg flex items-center gap-1"
-            >
-              <FileUp className="w-4 h-4" />
-              Export CSV
-            </button>
+        <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-4 py-3">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <span className="text-emerald-400 text-sm font-medium">
+              {selectedIds.size} transaction{selectedIds.size > 1 ? 's' : ''} selected
+            </span>
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Bulk Category */}
+              <div className="relative">
+                <select
+                  value={bulkCategory}
+                  onChange={(e) => setBulkCategory(e.target.value)}
+                  className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 pr-8 text-sm focus:outline-none appearance-none cursor-pointer"
+                >
+                  <option value="">Change category...</option>
+                  {categoryNames.map(cat => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
+              </div>
+              
+              {/* Bulk Type */}
+              <div className="relative">
+                <select
+                  value={bulkType}
+                  onChange={(e) => setBulkType(e.target.value)}
+                  className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 pr-8 text-sm focus:outline-none appearance-none cursor-pointer"
+                >
+                  <option value="">Change type...</option>
+                  <option value="income">Income</option>
+                  <option value="expense">Expense</option>
+                  <option value="internal">Internal</option>
+                </select>
+                <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
+              </div>
+
+              {/* Apply Button */}
+              {(bulkCategory || bulkType) && (
+                <button
+                  onClick={async () => {
+                    setBulkProcessing(true)
+                    const updates: { category?: string; type?: 'income' | 'expense' | 'internal' } = {}
+                    if (bulkCategory) updates.category = bulkCategory
+                    if (bulkType) updates.type = bulkType as 'income' | 'expense' | 'internal'
+                    await onBulkUpdateTransactions(Array.from(selectedIds), updates)
+                    setSelectedIds(new Set())
+                    setBulkCategory('')
+                    setBulkType('')
+                    setBulkProcessing(false)
+                  }}
+                  disabled={bulkProcessing}
+                  className="px-3 py-2 bg-emerald-500 hover:bg-emerald-400 text-black text-sm font-medium rounded-lg flex items-center gap-2 disabled:opacity-50"
+                >
+                  {bulkProcessing && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Apply
+                </button>
+              )}
+              
+              <button
+                onClick={() => setSelectedIds(new Set())}
+                className="px-3 py-2 text-zinc-400 hover:text-white text-sm rounded-lg hover:bg-zinc-800"
+              >
+                Clear
+              </button>
+              <button
+                onClick={exportCSV}
+                className="px-3 py-2 bg-zinc-700 hover:bg-zinc-600 text-white text-sm font-medium rounded-lg flex items-center gap-1"
+              >
+                <FileUp className="w-4 h-4" />
+                Export
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1711,43 +1771,72 @@ function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths,
                 </th>
                 <th className="text-left p-4 text-zinc-400 text-sm font-medium">Date</th>
                 <th className="text-left p-4 text-zinc-400 text-sm font-medium">Description</th>
-                <th className="text-left p-4 text-zinc-400 text-sm font-medium">Category</th>
+                <th className="text-left p-4 text-zinc-400 text-sm font-medium">Category / Type</th>
                 <th className="text-right p-4 text-zinc-400 text-sm font-medium">Amount</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800">
-              {filtered.map((tx) => (
-                <tr 
-                  key={tx.id} 
-                  className={`hover:bg-zinc-800/50 cursor-pointer transition-colors ${selectedIds.has(tx.id) ? 'bg-emerald-500/5' : ''}`}
-                  onClick={() => setSelectedTransaction(tx)}
-                >
-                  <td className="p-4" onClick={(e) => e.stopPropagation()}>
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.has(tx.id)}
-                      onChange={() => toggleSelect(tx.id)}
-                      className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-0 cursor-pointer"
-                    />
-                  </td>
-                  <td className="p-4 text-sm whitespace-nowrap">{new Date(tx.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
-                  <td className="p-4">
-                    <p className="font-medium">{tx.description}</p>
-                    <p className="text-zinc-500 text-xs">{tx.bank} • {tx.account}</p>
-                  </td>
-                  <td className="p-4">
-                    <span className="px-2 py-1 bg-zinc-700/50 rounded text-zinc-300 text-xs">{tx.category}</span>
-                  </td>
-                  <td className={`p-4 text-right font-semibold whitespace-nowrap ${tx.type === 'income' ? 'text-emerald-400' : tx.type === 'expense' ? 'text-red-400' : 'text-blue-400'}`}>
-                    <div>{tx.amount > 0 ? '+' : ''}{formatCurrency(tx.amount)}</div>
-                    {tx.originalCurrency && (
-                      <div className="text-xs text-zinc-500 font-normal">
-                        {new Intl.NumberFormat('en-US', { style: 'currency', currency: tx.originalCurrency, minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(Math.abs(tx.originalAmount || 0))}
+              {filtered.map((tx) => {
+                const catColor = allCategories.find(c => c.name === tx.category)?.color || 'zinc'
+                const colorClasses: Record<string, string> = {
+                  purple: 'bg-purple-500/20 text-purple-400',
+                  cyan: 'bg-cyan-500/20 text-cyan-400',
+                  blue: 'bg-blue-500/20 text-blue-400',
+                  amber: 'bg-amber-500/20 text-amber-400',
+                  orange: 'bg-orange-500/20 text-orange-400',
+                  pink: 'bg-pink-500/20 text-pink-400',
+                  red: 'bg-red-500/20 text-red-400',
+                  emerald: 'bg-emerald-500/20 text-emerald-400',
+                  indigo: 'bg-indigo-500/20 text-indigo-400',
+                  teal: 'bg-teal-500/20 text-teal-400',
+                  rose: 'bg-rose-500/20 text-rose-400',
+                  lime: 'bg-lime-500/20 text-lime-400',
+                  zinc: 'bg-zinc-700/50 text-zinc-300',
+                }
+                const catClass = colorClasses[catColor] || colorClasses.zinc
+                
+                return (
+                  <tr 
+                    key={tx.id} 
+                    className={`hover:bg-zinc-800/50 cursor-pointer transition-colors ${selectedIds.has(tx.id) ? 'bg-emerald-500/5' : ''}`}
+                    onClick={() => setSelectedTransaction(tx)}
+                  >
+                    <td className="p-4" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(tx.id)}
+                        onChange={() => toggleSelect(tx.id)}
+                        className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-0 cursor-pointer"
+                      />
+                    </td>
+                    <td className="p-4 text-sm whitespace-nowrap">{new Date(tx.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
+                    <td className="p-4">
+                      <p className="font-medium">{tx.description}</p>
+                      <p className="text-zinc-500 text-xs">{tx.bank} • {tx.account}</p>
+                    </td>
+                    <td className="p-4">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${catClass}`}>{tx.category}</span>
+                        <span className={`px-2 py-0.5 rounded text-xs ${
+                          tx.type === 'income' ? 'bg-emerald-500/20 text-emerald-400' : 
+                          tx.type === 'expense' ? 'bg-red-500/20 text-red-400' : 
+                          'bg-blue-500/20 text-blue-400'
+                        }`}>
+                          {tx.type}
+                        </span>
                       </div>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td className={`p-4 text-right font-semibold whitespace-nowrap ${tx.type === 'income' ? 'text-emerald-400' : tx.type === 'expense' ? 'text-red-400' : 'text-blue-400'}`}>
+                      <div>{tx.amount > 0 ? '+' : ''}{formatCurrency(tx.amount)}</div>
+                      {tx.originalCurrency && (
+                        <div className="text-xs text-zinc-500 font-normal">
+                          {new Intl.NumberFormat('en-US', { style: 'currency', currency: tx.originalCurrency, minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(Math.abs(tx.originalAmount || 0))}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -1762,7 +1851,15 @@ function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths,
       {selectedTransaction && (
         <TransactionDetailModal 
           transaction={selectedTransaction} 
-          onClose={() => setSelectedTransaction(null)} 
+          onClose={() => setSelectedTransaction(null)}
+          allCategories={allCategories}
+          onUpdate={async (updates) => {
+            const success = await onUpdateTransaction(selectedTransaction.id, updates)
+            if (success) {
+              setSelectedTransaction(prev => prev ? { ...prev, ...updates } as Transaction : null)
+            }
+            return success
+          }}
         />
       )}
     </div>
@@ -1772,7 +1869,33 @@ function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths,
 // ============================================
 // TRANSACTION DETAIL MODAL
 // ============================================
-function TransactionDetailModal({ transaction: tx, onClose }: { transaction: Transaction; onClose: () => void }) {
+function TransactionDetailModal({ transaction: tx, onClose, allCategories, onUpdate }: { 
+  transaction: Transaction
+  onClose: () => void
+  allCategories?: { id: string; name: string; color: string }[]
+  onUpdate?: (updates: { category?: string; type?: 'income' | 'expense' | 'internal' }) => Promise<boolean>
+}) {
+  const [editing, setEditing] = useState(false)
+  const [editCategory, setEditCategory] = useState(tx.category)
+  const [editType, setEditType] = useState(tx.type)
+  const [saving, setSaving] = useState(false)
+
+  const handleSave = async () => {
+    if (!onUpdate) return
+    setSaving(true)
+    const updates: { category?: string; type?: 'income' | 'expense' | 'internal' } = {}
+    if (editCategory !== tx.category) updates.category = editCategory
+    if (editType !== tx.type) updates.type = editType as 'income' | 'expense' | 'internal'
+    
+    if (Object.keys(updates).length > 0) {
+      await onUpdate(updates)
+    }
+    setSaving(false)
+    setEditing(false)
+  }
+
+  const categoryNames = allCategories?.map(c => c.name) || []
+
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
       <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
@@ -1804,19 +1927,87 @@ function TransactionDetailModal({ transaction: tx, onClose }: { transaction: Tra
             )}
           </div>
 
-          {/* Classification */}
+          {/* Classification - Editable */}
           <div>
-            <p className="text-xs text-zinc-500 uppercase tracking-wider mb-2">Classification</p>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-zinc-800/50 rounded-lg p-3">
-                <p className="text-zinc-500 text-xs mb-1">Type</p>
-                <p className="font-medium capitalize">{tx.type}</p>
-              </div>
-              <div className="bg-zinc-800/50 rounded-lg p-3">
-                <p className="text-zinc-500 text-xs mb-1">Category</p>
-                <p className="font-medium">{tx.category || 'Uncategorized'}</p>
-              </div>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs text-zinc-500 uppercase tracking-wider">Classification</p>
+              {onUpdate && !editing && (
+                <button
+                  onClick={() => setEditing(true)}
+                  className="text-xs text-emerald-400 hover:text-emerald-300"
+                >
+                  Edit
+                </button>
+              )}
             </div>
+            
+            {editing ? (
+              <div className="space-y-3">
+                <div>
+                  <label className="text-zinc-500 text-xs mb-1 block">Type</label>
+                  <div className="relative">
+                    <select
+                      value={editType}
+                      onChange={(e) => setEditType(e.target.value as 'income' | 'expense' | 'internal')}
+                      className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 pr-8 focus:outline-none focus:border-emerald-500 appearance-none cursor-pointer"
+                    >
+                      <option value="income">Income</option>
+                      <option value="expense">Expense</option>
+                      <option value="internal">Internal</option>
+                    </select>
+                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-zinc-500 text-xs mb-1 block">Category</label>
+                  <div className="relative">
+                    <select
+                      value={editCategory}
+                      onChange={(e) => setEditCategory(e.target.value)}
+                      className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 pr-8 focus:outline-none focus:border-emerald-500 appearance-none cursor-pointer"
+                    >
+                      {categoryNames.map(cat => (
+                        <option key={cat} value={cat}>{cat}</option>
+                      ))}
+                    </select>
+                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => { setEditing(false); setEditCategory(tx.category); setEditType(tx.type) }}
+                    className="flex-1 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-sm font-medium transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSave}
+                    disabled={saving}
+                    className="flex-1 py-2 bg-emerald-500 hover:bg-emerald-400 text-black rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    {saving && <Loader2 className="w-4 h-4 animate-spin" />}
+                    Save
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-zinc-800/50 rounded-lg p-3">
+                  <p className="text-zinc-500 text-xs mb-1">Type</p>
+                  <span className={`inline-flex px-2 py-0.5 rounded text-sm font-medium ${
+                    tx.type === 'income' ? 'bg-emerald-500/20 text-emerald-400' : 
+                    tx.type === 'expense' ? 'bg-red-500/20 text-red-400' : 
+                    'bg-blue-500/20 text-blue-400'
+                  }`}>
+                    {tx.type}
+                  </span>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3">
+                  <p className="text-zinc-500 text-xs mb-1">Category</p>
+                  <p className="font-medium">{tx.category || 'Uncategorized'}</p>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Source Details */}
@@ -2156,7 +2347,8 @@ function RulesTab({
   customCategories,
   onCreateCategory,
   onDeleteCategory,
-  onMigrateAndDeleteCategory
+  onMigrateAndDeleteCategory,
+  onBulkUpdateRules
 }: { 
   rules: CategorizationRule[]
   onCreateRule: (keyword: string, category: string, matchType: 'contains' | 'exact' | 'starts_with') => Promise<boolean>
@@ -2170,6 +2362,7 @@ function RulesTab({
   onCreateCategory: (name: string, color: string) => Promise<boolean>
   onDeleteCategory: (id: string, name: string) => Promise<boolean>
   onMigrateAndDeleteCategory: (categoryName: string, newCategory: string, categoryId: string) => Promise<boolean>
+  onBulkUpdateRules: (ruleIds: string[], newCategory: string) => Promise<boolean>
 }) {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showCreateCategoryModal, setShowCreateCategoryModal] = useState(false)
@@ -2184,10 +2377,44 @@ function RulesTab({
   const [migrationTarget, setMigrationTarget] = useState('')
   const [savingCategories, setSavingCategories] = useState(false)
 
+  // Rules selection and editing states
+  const [selectedRuleIds, setSelectedRuleIds] = useState<Set<string>>(new Set())
+  const [bulkRuleCategory, setBulkRuleCategory] = useState('')
+  const [ruleDetailModal, setRuleDetailModal] = useState<CategorizationRule | null>(null)
+  const [categoryFilter, setCategoryFilter] = useState<string>('all')
+  const [bulkProcessing, setBulkProcessing] = useState(false)
+
   const categoryNames = categories.map(c => c.name)
 
-  // Count how many transactions each rule would match
-  const getRuleMatchCount = (rule: CategorizationRule) => {
+  // Get category color
+  const getCategoryColor = (categoryName: string) => {
+    const cat = categories.find(c => c.name === categoryName)
+    if (!cat) return 'zinc'
+    return cat.color
+  }
+
+  const getCategoryBgClass = (categoryName: string) => {
+    const color = getCategoryColor(categoryName)
+    const colorMap: Record<string, string> = {
+      purple: 'bg-purple-500/20 text-purple-400',
+      cyan: 'bg-cyan-500/20 text-cyan-400',
+      blue: 'bg-blue-500/20 text-blue-400',
+      amber: 'bg-amber-500/20 text-amber-400',
+      orange: 'bg-orange-500/20 text-orange-400',
+      pink: 'bg-pink-500/20 text-pink-400',
+      red: 'bg-red-500/20 text-red-400',
+      emerald: 'bg-emerald-500/20 text-emerald-400',
+      indigo: 'bg-indigo-500/20 text-indigo-400',
+      teal: 'bg-teal-500/20 text-teal-400',
+      rose: 'bg-rose-500/20 text-rose-400',
+      lime: 'bg-lime-500/20 text-lime-400',
+      zinc: 'bg-zinc-500/20 text-zinc-400',
+    }
+    return colorMap[color] || colorMap.zinc
+  }
+
+  // Get transactions matching a rule
+  const getRuleTransactions = (rule: CategorizationRule) => {
     return transactions.filter(tx => {
       const searchText = `${tx.description} ${tx.payee || ''}`.toLowerCase()
       switch (rule.match_type) {
@@ -2195,14 +2422,56 @@ function RulesTab({
         case 'starts_with': return searchText.startsWith(rule.keyword)
         default: return searchText.includes(rule.keyword)
       }
-    }).length
+    })
   }
 
-  // Filter rules by search
-  const filteredRules = rules.filter(r => 
-    r.keyword.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    r.category.toLowerCase().includes(searchTerm.toLowerCase())
-  )
+  // Count how many transactions each rule would match
+  const getRuleMatchCount = (rule: CategorizationRule) => {
+    return getRuleTransactions(rule).length
+  }
+
+  // Toggle rule selection
+  const toggleRuleSelection = (ruleId: string) => {
+    setSelectedRuleIds(prev => {
+      const next = new Set(prev)
+      if (next.has(ruleId)) {
+        next.delete(ruleId)
+      } else {
+        next.add(ruleId)
+      }
+      return next
+    })
+  }
+
+  // Select/deselect all filtered rules
+  const toggleSelectAllRules = () => {
+    const allSelected = filteredRules.every(r => selectedRuleIds.has(r.id))
+    if (allSelected) {
+      setSelectedRuleIds(new Set())
+    } else {
+      setSelectedRuleIds(new Set(filteredRules.map(r => r.id)))
+    }
+  }
+
+  // Handle bulk update
+  const handleBulkUpdateRules = async () => {
+    if (!bulkRuleCategory || selectedRuleIds.size === 0) return
+    setBulkProcessing(true)
+    const success = await onBulkUpdateRules(Array.from(selectedRuleIds), bulkRuleCategory)
+    if (success) {
+      setSelectedRuleIds(new Set())
+      setBulkRuleCategory('')
+    }
+    setBulkProcessing(false)
+  }
+
+  // Filter rules by search and category
+  const filteredRules = rules.filter(r => {
+    const matchesSearch = r.keyword.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      r.category.toLowerCase().includes(searchTerm.toLowerCase())
+    const matchesCategory = categoryFilter === 'all' || r.category === categoryFilter
+    return matchesSearch && matchesCategory
+  })
 
   // All uncategorized transactions - group by description and sort by frequency
   const otherTransactions = transactions.filter(tx => tx.category === 'Other')
@@ -2561,48 +2830,133 @@ function RulesTab({
         </div>
       )}
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-500" />
-        <input
-          type="text"
-          placeholder="Search rules..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="w-full bg-zinc-800/50 border border-zinc-700 rounded-xl pl-12 pr-4 py-3 focus:outline-none focus:border-zinc-600"
-        />
+      {/* Search and Filters */}
+      <div className="flex gap-3">
+        <div className="relative flex-1">
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-500" />
+          <input
+            type="text"
+            placeholder="Search rules..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full bg-zinc-800/50 border border-zinc-700 rounded-xl pl-12 pr-4 py-3 focus:outline-none focus:border-zinc-600"
+          />
+        </div>
+        <div className="relative">
+          <select
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value)}
+            className="bg-zinc-800/50 border border-zinc-700 rounded-xl px-4 py-3 pr-10 focus:outline-none focus:border-zinc-600 appearance-none cursor-pointer min-w-[180px]"
+          >
+            <option value="all">All Categories</option>
+            {categoryNames.map(cat => (
+              <option key={cat} value={cat}>{cat}</option>
+            ))}
+          </select>
+          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
+        </div>
       </div>
+
+      {/* Bulk Action Bar */}
+      {selectedRuleIds.size > 0 && (
+        <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4 flex items-center gap-4">
+          <span className="text-emerald-400 font-medium">{selectedRuleIds.size} rules selected</span>
+          <div className="flex-1" />
+          <div className="relative">
+            <select
+              value={bulkRuleCategory}
+              onChange={(e) => setBulkRuleCategory(e.target.value)}
+              className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 pr-8 text-sm focus:outline-none appearance-none cursor-pointer"
+            >
+              <option value="">Change category to...</option>
+              {categoryNames.map(cat => (
+                <option key={cat} value={cat}>{cat}</option>
+              ))}
+            </select>
+            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
+          </div>
+          <button
+            onClick={handleBulkUpdateRules}
+            disabled={!bulkRuleCategory || bulkProcessing}
+            className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-black text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+          >
+            {bulkProcessing && <Loader2 className="w-4 h-4 animate-spin" />}
+            Update Rules
+          </button>
+          <button
+            onClick={() => setSelectedRuleIds(new Set())}
+            className="p-2 hover:bg-zinc-800 rounded-lg text-zinc-400"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Rules List */}
       <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl overflow-hidden">
         {/* Table Header */}
-        <div className="grid grid-cols-12 gap-4 px-5 py-3 bg-zinc-800 text-xs text-zinc-500 uppercase tracking-wider">
+        <div className="grid grid-cols-12 gap-4 px-5 py-3 bg-zinc-800 text-xs text-zinc-500 uppercase tracking-wider items-center">
+          <div className="col-span-1">
+            <button
+              onClick={toggleSelectAllRules}
+              className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+                filteredRules.length > 0 && filteredRules.every(r => selectedRuleIds.has(r.id))
+                  ? 'bg-emerald-500 border-emerald-500' 
+                  : 'border-zinc-600 hover:border-zinc-500'
+              }`}
+            >
+              {filteredRules.length > 0 && filteredRules.every(r => selectedRuleIds.has(r.id)) && (
+                <Check className="w-3 h-3 text-black" strokeWidth={3} />
+              )}
+            </button>
+          </div>
           <div className="col-span-4">Keyword</div>
           <div className="col-span-2">Match Type</div>
           <div className="col-span-2">Category</div>
           <div className="col-span-2 text-right">Matches</div>
-          <div className="col-span-2 text-right">Actions</div>
+          <div className="col-span-1 text-right">Actions</div>
         </div>
 
         {/* Rules */}
         {filteredRules.length === 0 ? (
           <div className="p-12 text-center">
             <Tag className="w-12 h-12 text-zinc-600 mx-auto mb-4" />
-            <p className="text-zinc-400 font-medium mb-2">No rules yet</p>
-            <p className="text-zinc-600 text-sm mb-4">Create rules to auto-categorize your transactions</p>
-            <button
-              onClick={() => setShowCreateModal(true)}
-              className="bg-emerald-500 hover:bg-emerald-400 text-black font-medium px-4 py-2 rounded-lg transition-colors"
-            >
-              Create First Rule
-            </button>
+            <p className="text-zinc-400 font-medium mb-2">No rules found</p>
+            <p className="text-zinc-600 text-sm mb-4">
+              {searchTerm || categoryFilter !== 'all' ? 'Try adjusting your filters' : 'Create rules to auto-categorize your transactions'}
+            </p>
+            {!searchTerm && categoryFilter === 'all' && (
+              <button
+                onClick={() => setShowCreateModal(true)}
+                className="bg-emerald-500 hover:bg-emerald-400 text-black font-medium px-4 py-2 rounded-lg transition-colors"
+              >
+                Create First Rule
+              </button>
+            )}
           </div>
         ) : (
           <div className="divide-y divide-zinc-800">
             {filteredRules.map((rule) => {
               const matchCount = getRuleMatchCount(rule)
+              const isSelected = selectedRuleIds.has(rule.id)
               return (
-                <div key={rule.id} className="grid grid-cols-12 gap-4 px-5 py-4 items-center hover:bg-zinc-800/50 transition-colors">
+                <div 
+                  key={rule.id} 
+                  className={`grid grid-cols-12 gap-4 px-5 py-4 items-center hover:bg-zinc-800/50 transition-colors cursor-pointer ${isSelected ? 'bg-emerald-500/5' : ''}`}
+                  onClick={() => setRuleDetailModal(rule)}
+                >
+                  <div className="col-span-1" onClick={e => e.stopPropagation()}>
+                    <button
+                      onClick={() => toggleRuleSelection(rule.id)}
+                      className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+                        isSelected 
+                          ? 'bg-emerald-500 border-emerald-500' 
+                          : 'border-zinc-600 hover:border-zinc-500'
+                      }`}
+                    >
+                      {isSelected && <Check className="w-3 h-3 text-black" strokeWidth={3} />}
+                    </button>
+                  </div>
                   <div className="col-span-4">
                     <span className="font-mono text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded">
                       {rule.keyword}
@@ -2612,14 +2966,7 @@ function RulesTab({
                     <span className="text-zinc-400 text-sm capitalize">{rule.match_type.replace('_', ' ')}</span>
                   </div>
                   <div className="col-span-2">
-                    <span className={`px-2 py-1 rounded-lg text-xs font-medium ${
-                      rule.category === 'Ads' ? 'bg-purple-500/20 text-purple-400' :
-                      rule.category === 'Software' ? 'bg-cyan-500/20 text-cyan-400' :
-                      rule.category === 'Payroll' ? 'bg-blue-500/20 text-blue-400' :
-                      rule.category === 'Fees' ? 'bg-amber-500/20 text-amber-400' :
-                      rule.category === 'Shipping' ? 'bg-orange-500/20 text-orange-400' :
-                      'bg-zinc-500/20 text-zinc-400'
-                    }`}>
+                    <span className={`px-2 py-1 rounded-lg text-xs font-medium ${getCategoryBgClass(rule.category)}`}>
                       {rule.category}
                     </span>
                   </div>
@@ -2628,7 +2975,7 @@ function RulesTab({
                       {matchCount} transactions
                     </span>
                   </div>
-                  <div className="col-span-2 flex justify-end gap-2">
+                  <div className="col-span-1 flex justify-end gap-1" onClick={e => e.stopPropagation()}>
                     <button
                       onClick={() => onDeleteRule(rule.id)}
                       className="p-2 hover:bg-red-500/20 rounded-lg text-zinc-400 hover:text-red-400 transition-colors"
@@ -2642,6 +2989,51 @@ function RulesTab({
           </div>
         )}
       </div>
+
+      {/* Rule Detail Modal */}
+      {ruleDetailModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setRuleDetailModal(null)}>
+          <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-3xl max-h-[80vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="p-5 border-b border-zinc-800 flex items-center justify-between flex-shrink-0">
+              <div>
+                <h3 className="text-lg font-semibold flex items-center gap-3">
+                  <span className="font-mono text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded text-base">
+                    {ruleDetailModal.keyword}
+                  </span>
+                  <span className={`px-2 py-1 rounded-lg text-xs font-medium ${getCategoryBgClass(ruleDetailModal.category)}`}>
+                    {ruleDetailModal.category}
+                  </span>
+                </h3>
+                <p className="text-zinc-500 text-sm mt-1">
+                  {getRuleMatchCount(ruleDetailModal)} matching transactions • {ruleDetailModal.match_type.replace('_', ' ')}
+                </p>
+              </div>
+              <button onClick={() => setRuleDetailModal(null)} className="p-2 hover:bg-zinc-800 rounded-lg">
+                <X className="w-5 h-5 text-zinc-400" />
+              </button>
+            </div>
+            
+            <div className="p-5 overflow-y-auto flex-1">
+              <div className="space-y-2">
+                {getRuleTransactions(ruleDetailModal).map((tx) => (
+                  <div key={tx.id} className="flex items-center justify-between p-3 bg-zinc-800/50 rounded-lg">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium truncate">{tx.description}</p>
+                      <p className="text-zinc-500 text-sm">{tx.date} • {tx.bank}</p>
+                    </div>
+                    <span className={`font-semibold ${tx.type === 'income' ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {tx.type === 'income' ? '+' : '-'}{formatCurrency(Math.abs(tx.amount))}
+                    </span>
+                  </div>
+                ))}
+                {getRuleTransactions(ruleDetailModal).length === 0 && (
+                  <p className="text-zinc-500 text-center py-8">No transactions match this rule</p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Create Rule Modal */}
       {showCreateModal && (
@@ -3335,6 +3727,32 @@ export default function Dashboard() {
     return true
   }
 
+  // Bulk update multiple rules to a new category
+  const handleBulkUpdateRules = async (ruleIds: string[], newCategory: string) => {
+    setSaving(true)
+    try {
+      for (const ruleId of ruleIds) {
+        await (supabase
+          .from('categorization_rules') as any)
+          .update({ category: newCategory })
+          .eq('id', ruleId)
+      }
+      
+      setCategorizationRules(prev => prev.map(r => 
+        ruleIds.includes(r.id) ? { ...r, category: newCategory } : r
+      ))
+      
+      // Optionally apply rules to existing transactions
+      await loadData()
+      return true
+    } catch (err) {
+      console.error('Error bulk updating rules:', err)
+      return false
+    } finally {
+      setSaving(false)
+    }
+  }
+
   // Apply rules to existing transactions (retroactive)
   const handleApplyRulesToExisting = async () => {
     if (categorizationRules.length === 0) return 0
@@ -3428,6 +3846,51 @@ export default function Dashboard() {
       return true
     } catch (err) {
       console.error('Error bulk updating:', err)
+      return false
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Update a single transaction
+  const handleUpdateTransaction = async (id: string, updates: { category?: string; type?: 'income' | 'expense' | 'internal' }) => {
+    try {
+      const { error } = await (supabase
+        .from('transactions') as any)
+        .update(updates)
+        .eq('id', id)
+      
+      if (error) {
+        console.error('Error updating transaction:', error)
+        return false
+      }
+      
+      setTransactions(prev => prev.map(tx => tx.id === id ? { ...tx, ...updates } as Transaction : tx))
+      return true
+    } catch (err) {
+      console.error('Error updating transaction:', err)
+      return false
+    }
+  }
+
+  // Bulk update transactions
+  const handleBulkUpdateTransactions = async (ids: string[], updates: { category?: string; type?: 'income' | 'expense' | 'internal' }) => {
+    setSaving(true)
+    try {
+      for (const id of ids) {
+        await (supabase
+          .from('transactions') as any)
+          .update(updates)
+          .eq('id', id)
+      }
+      
+      setTransactions(prev => prev.map(tx => 
+        ids.includes(tx.id) ? { ...tx, ...updates } as Transaction : tx
+      ))
+      
+      return true
+    } catch (err) {
+      console.error('Error bulk updating transactions:', err)
       return false
     } finally {
       setSaving(false)
@@ -3604,9 +4067,9 @@ export default function Dashboard() {
         {/* Page Content */}
         <main className="p-6">
           {activeTab === 'overview' && <OverviewTab data={aggregatedData} transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} loading={loading} categorizationRules={categorizationRules} onCreateRule={handleCreateRule} onApplyRules={handleApplyRulesToExisting} allCategories={allCategories} onBulkUpdateCategory={handleBulkUpdateCategory} />}
-          {activeTab === 'transactions' && <TransactionsTab transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} selectedYear={selectedYear} selectedMonths={selectedMonths} loading={loading} />}
+          {activeTab === 'transactions' && <TransactionsTab transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} selectedYear={selectedYear} selectedMonths={selectedMonths} loading={loading} allCategories={allCategories} onUpdateTransaction={handleUpdateTransaction} onBulkUpdateTransactions={handleBulkUpdateTransactions} />}
           {activeTab === 'payroll' && <PayrollTab teamMembers={teamMembers} currentMonth={getPayrollMonth()} onUpdateVariable={handleUpdateVariable} onAddMember={() => setShowAddMemberModal(true)} onDeleteMember={handleDeleteMember} loading={loading} payrollTransactions={filteredTransactions.filter(tx => tx.category === 'Payroll')} />}
-          {activeTab === 'rules' && <RulesTab rules={categorizationRules} onCreateRule={handleCreateRule} onDeleteRule={handleDeleteRule} onUpdateRule={handleUpdateRule} transactions={transactions} onApplyRules={handleApplyRulesToExisting} loading={loading} categories={allCategories} customCategories={customCategories} onCreateCategory={handleCreateCategory} onDeleteCategory={handleDeleteCategory} onMigrateAndDeleteCategory={handleMigrateAndDeleteCategory} />}
+          {activeTab === 'rules' && <RulesTab rules={categorizationRules} onCreateRule={handleCreateRule} onDeleteRule={handleDeleteRule} onUpdateRule={handleUpdateRule} transactions={transactions} onApplyRules={handleApplyRulesToExisting} loading={loading} categories={allCategories} customCategories={customCategories} onCreateCategory={handleCreateCategory} onDeleteCategory={handleDeleteCategory} onMigrateAndDeleteCategory={handleMigrateAndDeleteCategory} onBulkUpdateRules={handleBulkUpdateRules} />}
         </main>
       </div>
 
