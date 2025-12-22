@@ -375,16 +375,92 @@ function OverviewTab({ data, transactions, onUpload }: { data: { income: number;
 // ============================================
 function TransactionsTab({ transactions, onUpload }: { transactions: Transaction[]; onUpload: () => void }) {
   const [filterType, setFilterType] = useState('all')
+  const [filterCategory, setFilterCategory] = useState('all')
+  const [filterDateFrom, setFilterDateFrom] = useState('')
+  const [filterDateTo, setFilterDateTo] = useState('')
   const [search, setSearch] = useState('')
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null)
+
+  // Get unique categories from transactions
+  const categories = [...new Set(transactions.map(t => t.category).filter(Boolean))].sort()
 
   const filtered = transactions.filter(t => {
     if (filterType !== 'all' && t.type !== filterType) return false
+    if (filterCategory !== 'all' && t.category !== filterCategory) return false
+    if (filterDateFrom && t.date < filterDateFrom) return false
+    if (filterDateTo && t.date > filterDateTo) return false
     if (search && !t.description.toLowerCase().includes(search.toLowerCase())) return false
     return true
   })
 
   const totalIncome = filtered.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0)
   const totalExpenses = filtered.filter(t => t.type === 'expense').reduce((s, t) => s + Math.abs(t.amount), 0)
+
+  // Selection handlers
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(id)) {
+        newSet.delete(id)
+      } else {
+        newSet.add(id)
+      }
+      return newSet
+    })
+  }
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filtered.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(filtered.map(t => t.id)))
+    }
+  }
+
+  const isAllSelected = filtered.length > 0 && selectedIds.size === filtered.length
+  const isSomeSelected = selectedIds.size > 0 && selectedIds.size < filtered.length
+
+  // Export selected transactions as CSV
+  const exportCSV = () => {
+    const toExport = filtered.filter(t => selectedIds.has(t.id))
+    if (toExport.length === 0) return
+
+    const headers = ['Date', 'Description', 'Reference', 'Bank', 'Account', 'Type', 'Category', 'Amount', 'Currency', 'Original Amount', 'Original Currency']
+    const rows = toExport.map(t => [
+      t.date,
+      `"${t.description.replace(/"/g, '""')}"`,
+      `"${(t.reference || '').replace(/"/g, '""')}"`,
+      t.bank,
+      t.account,
+      t.type,
+      t.category,
+      t.amount.toFixed(2),
+      t.currency,
+      t.originalAmount?.toFixed(2) || '',
+      t.originalCurrency || ''
+    ])
+
+    const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `transactions-export-${new Date().toISOString().split('T')[0]}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // Clear filters
+  const clearFilters = () => {
+    setFilterType('all')
+    setFilterCategory('all')
+    setFilterDateFrom('')
+    setFilterDateTo('')
+    setSearch('')
+  }
+
+  const hasActiveFilters = filterType !== 'all' || filterCategory !== 'all' || filterDateFrom || filterDateTo || search
 
   if (transactions.length === 0) {
     return (
@@ -402,6 +478,7 @@ function TransactionsTab({ transactions, onUpload }: { transactions: Transaction
 
   return (
     <div className="space-y-6">
+      {/* Summary Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4">
           <p className="text-emerald-400/70 text-sm">Income</p>
@@ -422,30 +499,107 @@ function TransactionsTab({ transactions, onUpload }: { transactions: Transaction
           <p className="text-2xl font-bold text-blue-400">{filtered.length}</p>
         </div>
       </div>
-      <div className="flex flex-col sm:flex-row gap-4">
-        <input
-          type="text"
-          placeholder="Search transactions..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="flex-1 bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 focus:outline-none focus:border-zinc-600"
-        />
-        <select
-          value={filterType}
-          onChange={(e) => setFilterType(e.target.value)}
-          className="bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 focus:outline-none cursor-pointer"
-        >
-          <option value="all">All Types</option>
-          <option value="income">Income</option>
-          <option value="expense">Expenses</option>
-          <option value="internal">Internal</option>
-        </select>
+
+      {/* Filters */}
+      <div className="bg-zinc-800/50 border border-zinc-700 rounded-xl p-4 space-y-4">
+        <div className="flex flex-col lg:flex-row gap-4">
+          <input
+            type="text"
+            placeholder="Search transactions..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-2.5 focus:outline-none focus:border-zinc-600"
+          />
+          <select
+            value={filterType}
+            onChange={(e) => setFilterType(e.target.value)}
+            className="bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-2.5 focus:outline-none cursor-pointer min-w-[140px]"
+          >
+            <option value="all">All Types</option>
+            <option value="income">Income</option>
+            <option value="expense">Expenses</option>
+            <option value="internal">Internal</option>
+          </select>
+          <select
+            value={filterCategory}
+            onChange={(e) => setFilterCategory(e.target.value)}
+            className="bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-2.5 focus:outline-none cursor-pointer min-w-[140px]"
+          >
+            <option value="all">All Categories</option>
+            {categories.map(cat => (
+              <option key={cat} value={cat}>{cat}</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex flex-col sm:flex-row gap-4 items-end">
+          <div className="flex-1">
+            <label className="block text-zinc-500 text-xs mb-1">From</label>
+            <input
+              type="date"
+              value={filterDateFrom}
+              onChange={(e) => setFilterDateFrom(e.target.value)}
+              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-2 focus:outline-none focus:border-zinc-600"
+            />
+          </div>
+          <div className="flex-1">
+            <label className="block text-zinc-500 text-xs mb-1">To</label>
+            <input
+              type="date"
+              value={filterDateTo}
+              onChange={(e) => setFilterDateTo(e.target.value)}
+              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-2 focus:outline-none focus:border-zinc-600"
+            />
+          </div>
+          {hasActiveFilters && (
+            <button
+              onClick={clearFilters}
+              className="px-4 py-2 text-zinc-400 hover:text-white hover:bg-zinc-700 rounded-lg transition-colors text-sm"
+            >
+              Clear Filters
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Selection Actions */}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center justify-between bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-4 py-3">
+          <span className="text-emerald-400 text-sm font-medium">
+            {selectedIds.size} transaction{selectedIds.size > 1 ? 's' : ''} selected
+          </span>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setSelectedIds(new Set())}
+              className="px-3 py-1.5 text-zinc-400 hover:text-white text-sm rounded-lg hover:bg-zinc-800"
+            >
+              Clear
+            </button>
+            <button
+              onClick={exportCSV}
+              className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-black text-sm font-medium rounded-lg flex items-center gap-1"
+            >
+              <FileUp className="w-4 h-4" />
+              Export CSV
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Transactions Table */}
       <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
               <tr className="border-b border-zinc-700">
+                <th className="p-4 w-12">
+                  <input
+                    type="checkbox"
+                    checked={isAllSelected}
+                    ref={(el) => { if (el) el.indeterminate = isSomeSelected }}
+                    onChange={toggleSelectAll}
+                    className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-0 cursor-pointer"
+                  />
+                </th>
                 <th className="text-left p-4 text-zinc-400 text-sm font-medium">Date</th>
                 <th className="text-left p-4 text-zinc-400 text-sm font-medium">Description</th>
                 <th className="text-left p-4 text-zinc-400 text-sm font-medium">Category</th>
@@ -454,20 +608,138 @@ function TransactionsTab({ transactions, onUpload }: { transactions: Transaction
             </thead>
             <tbody className="divide-y divide-zinc-800">
               {filtered.map((tx) => (
-                <tr key={tx.id} className="hover:bg-zinc-800/50">
-                  <td className="p-4 text-sm">{new Date(tx.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
+                <tr 
+                  key={tx.id} 
+                  className={`hover:bg-zinc-800/50 cursor-pointer transition-colors ${selectedIds.has(tx.id) ? 'bg-emerald-500/5' : ''}`}
+                  onClick={() => setSelectedTransaction(tx)}
+                >
+                  <td className="p-4" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(tx.id)}
+                      onChange={() => toggleSelect(tx.id)}
+                      className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-0 cursor-pointer"
+                    />
+                  </td>
+                  <td className="p-4 text-sm whitespace-nowrap">{new Date(tx.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
                   <td className="p-4">
                     <p className="font-medium">{tx.description}</p>
                     <p className="text-zinc-500 text-xs">{tx.bank} • {tx.account}</p>
                   </td>
-                  <td className="p-4"><span className="text-zinc-400 text-sm">{tx.category}</span></td>
-                  <td className={`p-4 text-right font-semibold ${tx.type === 'income' ? 'text-emerald-400' : tx.type === 'expense' ? 'text-red-400' : 'text-blue-400'}`}>
-                    {tx.amount > 0 ? '+' : ''}{formatCurrency(tx.amount, tx.currency)}
+                  <td className="p-4">
+                    <span className="px-2 py-1 bg-zinc-700/50 rounded text-zinc-300 text-xs">{tx.category}</span>
+                  </td>
+                  <td className={`p-4 text-right font-semibold whitespace-nowrap ${tx.type === 'income' ? 'text-emerald-400' : tx.type === 'expense' ? 'text-red-400' : 'text-blue-400'}`}>
+                    <div>{tx.amount > 0 ? '+' : ''}{formatCurrency(tx.amount)}</div>
+                    {tx.originalCurrency && (
+                      <div className="text-xs text-zinc-500 font-normal">
+                        {new Intl.NumberFormat('en-US', { style: 'currency', currency: tx.originalCurrency, minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(Math.abs(tx.originalAmount || 0))}
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
+        </div>
+        {filtered.length === 0 && (
+          <div className="p-8 text-center text-zinc-500">
+            No transactions match your filters
+          </div>
+        )}
+      </div>
+
+      {/* Transaction Detail Modal */}
+      {selectedTransaction && (
+        <TransactionDetailModal 
+          transaction={selectedTransaction} 
+          onClose={() => setSelectedTransaction(null)} 
+        />
+      )}
+    </div>
+  )
+}
+
+// ============================================
+// TRANSACTION DETAIL MODAL
+// ============================================
+function TransactionDetailModal({ transaction: tx, onClose }: { transaction: Transaction; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-lg" onClick={e => e.stopPropagation()}>
+        <div className="p-5 border-b border-zinc-800 flex items-center justify-between">
+          <div>
+            <h3 className="font-semibold text-lg">{tx.description}</h3>
+            <p className="text-zinc-500 text-sm">{tx.bank} • {tx.date}</p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-zinc-800 rounded-lg">
+            <X className="w-5 h-5 text-zinc-400" />
+          </button>
+        </div>
+        
+        <div className="p-5 space-y-4">
+          {/* Amount */}
+          <div className="text-center py-4">
+            <p className={`text-3xl font-bold ${tx.type === 'income' ? 'text-emerald-400' : tx.type === 'expense' ? 'text-red-400' : 'text-blue-400'}`}>
+              {tx.amount > 0 ? '+' : ''}{formatCurrency(tx.amount)}
+            </p>
+            {tx.originalCurrency && (
+              <p className="text-zinc-500 mt-1">
+                Original: {new Intl.NumberFormat('en-US', { style: 'currency', currency: tx.originalCurrency }).format(Math.abs(tx.originalAmount || 0))} {tx.originalCurrency}
+              </p>
+            )}
+          </div>
+
+          {/* Details Grid */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-zinc-800/50 rounded-lg p-3">
+              <p className="text-zinc-500 text-xs mb-1">Type</p>
+              <p className="font-medium capitalize">{tx.type}</p>
+            </div>
+            <div className="bg-zinc-800/50 rounded-lg p-3">
+              <p className="text-zinc-500 text-xs mb-1">Category</p>
+              <p className="font-medium">{tx.category || 'Uncategorized'}</p>
+            </div>
+            <div className="bg-zinc-800/50 rounded-lg p-3">
+              <p className="text-zinc-500 text-xs mb-1">Bank</p>
+              <p className="font-medium">{tx.bank}</p>
+            </div>
+            <div className="bg-zinc-800/50 rounded-lg p-3">
+              <p className="text-zinc-500 text-xs mb-1">Account</p>
+              <p className="font-medium">{tx.account || '-'}</p>
+            </div>
+            <div className="bg-zinc-800/50 rounded-lg p-3">
+              <p className="text-zinc-500 text-xs mb-1">Date</p>
+              <p className="font-medium">{new Date(tx.date).toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}</p>
+            </div>
+            <div className="bg-zinc-800/50 rounded-lg p-3">
+              <p className="text-zinc-500 text-xs mb-1">Period</p>
+              <p className="font-medium">{tx.period || '-'}</p>
+            </div>
+          </div>
+
+          {/* Reference */}
+          {tx.reference && (
+            <div className="bg-zinc-800/50 rounded-lg p-3">
+              <p className="text-zinc-500 text-xs mb-1">Reference / Notes</p>
+              <p className="text-sm text-zinc-300 break-words">{tx.reference}</p>
+            </div>
+          )}
+
+          {/* Transaction ID */}
+          <div className="bg-zinc-800/50 rounded-lg p-3">
+            <p className="text-zinc-500 text-xs mb-1">Transaction ID</p>
+            <p className="text-xs text-zinc-500 font-mono break-all">{tx.id}</p>
+          </div>
+        </div>
+
+        <div className="p-5 border-t border-zinc-800">
+          <button
+            onClick={onClose}
+            className="w-full py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-medium transition-colors"
+          >
+            Close
+          </button>
         </div>
       </div>
     </div>
