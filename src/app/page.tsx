@@ -592,11 +592,12 @@ export default function Dashboard() {
   const loadData = async () => {
     setLoading(true)
     try {
-      // Load transactions
+      // Load transactions (Supabase default is 1000, so we need to increase)
       const { data: txData, error: txError } = await supabase
         .from('transactions')
         .select('*')
         .order('date', { ascending: false })
+        .limit(10000)
       
       if (txError) {
         console.error('Error loading transactions:', txError)
