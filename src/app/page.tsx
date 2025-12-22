@@ -7,6 +7,13 @@ import { createClient } from '@/lib/supabase'
 // ============================================
 // TYPES
 // ============================================
+type Category = {
+  id: string
+  name: string
+  color: string
+  created_at?: string
+}
+
 type CategorizationRule = {
   id: string
   keyword: string
@@ -1819,7 +1826,11 @@ function RulesTab({
   onUpdateRule, 
   transactions,
   onApplyRules,
-  loading 
+  loading,
+  categories,
+  customCategories,
+  onCreateCategory,
+  onDeleteCategory
 }: { 
   rules: CategorizationRule[]
   onCreateRule: (keyword: string, category: string, matchType: 'contains' | 'exact' | 'starts_with') => Promise<boolean>
@@ -1828,13 +1839,19 @@ function RulesTab({
   transactions: Transaction[]
   onApplyRules: () => Promise<number>
   loading: boolean
+  categories: { id: string; name: string; color: string }[]
+  customCategories: Category[]
+  onCreateCategory: (name: string, color: string) => Promise<boolean>
+  onDeleteCategory: (id: string) => Promise<boolean>
 }) {
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [showCreateCategoryModal, setShowCreateCategoryModal] = useState(false)
+  const [activeSection, setActiveSection] = useState<'rules' | 'categories'>('rules')
   const [searchTerm, setSearchTerm] = useState('')
   const [applying, setApplying] = useState(false)
   const [applyResult, setApplyResult] = useState<number | null>(null)
 
-  const categories = ['Ads', 'Software', 'Payroll', 'Fees', 'Shipping', 'Products', 'Taxes', 'Operations', 'Refunds', 'Other']
+  const categoryNames = categories.map(c => c.name)
 
   // Count how many transactions each rule would match
   const getRuleMatchCount = (rule: CategorizationRule) => {
@@ -1883,45 +1900,159 @@ function RulesTab({
     setTimeout(() => setApplyResult(null), 3000)
   }
 
+  // Color options for categories
+  const colorOptions = [
+    { name: 'purple', class: 'bg-purple-500' },
+    { name: 'cyan', class: 'bg-cyan-500' },
+    { name: 'blue', class: 'bg-blue-500' },
+    { name: 'amber', class: 'bg-amber-500' },
+    { name: 'orange', class: 'bg-orange-500' },
+    { name: 'pink', class: 'bg-pink-500' },
+    { name: 'red', class: 'bg-red-500' },
+    { name: 'emerald', class: 'bg-emerald-500' },
+    { name: 'indigo', class: 'bg-indigo-500' },
+    { name: 'teal', class: 'bg-teal-500' },
+    { name: 'rose', class: 'bg-rose-500' },
+    { name: 'lime', class: 'bg-lime-500' },
+  ]
+
+  const getCategoryColorClass = (color: string) => {
+    return colorOptions.find(c => c.name === color)?.class || 'bg-zinc-500'
+  }
+
   if (loading) {
     return <LoadingSkeleton />
   }
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-bold">Categorization Rules</h2>
-          <p className="text-zinc-500 text-sm">{rules.length} rules • Auto-categorize transactions based on keywords</p>
-        </div>
-        <div className="flex items-center gap-3">
-          {applyResult !== null && (
-            <span className="text-emerald-400 text-sm animate-pulse">
-              {applyResult > 0 ? `Updated ${applyResult} transactions` : 'No transactions to update'}
-            </span>
-          )}
-          <button
-            onClick={handleApplyRules}
-            disabled={applying || rules.length === 0}
-            className="flex items-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-xl text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {applying ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Zap className="w-4 h-4" />
-            )}
-            Apply to Existing
-          </button>
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-black font-medium px-4 py-2.5 rounded-xl transition-colors"
-          >
-            <Plus className="w-5 h-5" />
-            New Rule
-          </button>
-        </div>
+      {/* Section Tabs */}
+      <div className="flex items-center gap-2 border-b border-zinc-800 pb-4">
+        <button
+          onClick={() => setActiveSection('rules')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            activeSection === 'rules' 
+              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' 
+              : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+          }`}
+        >
+          <span className="flex items-center gap-2">
+            <Tag className="w-4 h-4" />
+            Rules ({rules.length})
+          </span>
+        </button>
+        <button
+          onClick={() => setActiveSection('categories')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            activeSection === 'categories' 
+              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' 
+              : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+          }`}
+        >
+          <span className="flex items-center gap-2">
+            <LayoutDashboard className="w-4 h-4" />
+            Categories ({categories.length})
+          </span>
+        </button>
       </div>
+
+      {/* CATEGORIES SECTION */}
+      {activeSection === 'categories' && (
+        <>
+          {/* Categories Header */}
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-bold">Categories</h2>
+              <p className="text-zinc-500 text-sm">{categories.length} categories • Organize your transactions</p>
+            </div>
+            <button
+              onClick={() => setShowCreateCategoryModal(true)}
+              className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-black font-medium px-4 py-2.5 rounded-xl transition-colors"
+            >
+              <Plus className="w-5 h-5" />
+              New Category
+            </button>
+          </div>
+
+          {/* Categories Grid */}
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {categories.map((cat) => {
+              const txCount = transactions.filter(tx => tx.category === cat.name).length
+              const isCustom = !cat.id.startsWith('default-')
+              return (
+                <div 
+                  key={cat.id} 
+                  className="bg-zinc-800/50 border border-zinc-700 rounded-xl p-4 hover:border-zinc-600 transition-colors group"
+                >
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className={`w-4 h-4 rounded-full ${getCategoryColorClass(cat.color)}`} />
+                    <span className="font-medium flex-1">{cat.name}</span>
+                    {isCustom && (
+                      <button
+                        onClick={() => onDeleteCategory(cat.id)}
+                        className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-500/20 rounded-lg text-zinc-400 hover:text-red-400 transition-all"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-zinc-500 text-sm">{txCount} transactions</p>
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Create Category Modal */}
+          {showCreateCategoryModal && (
+            <CreateCategoryModal
+              onClose={() => setShowCreateCategoryModal(false)}
+              onSave={async (name, color) => {
+                const success = await onCreateCategory(name, color)
+                if (success) setShowCreateCategoryModal(false)
+              }}
+              colorOptions={colorOptions}
+              existingCategories={categoryNames}
+            />
+          )}
+        </>
+      )}
+
+      {/* RULES SECTION */}
+      {activeSection === 'rules' && (
+        <>
+          {/* Rules Header */}
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-bold">Categorization Rules</h2>
+              <p className="text-zinc-500 text-sm">{rules.length} rules • Auto-categorize transactions based on keywords</p>
+            </div>
+            <div className="flex items-center gap-3">
+              {applyResult !== null && (
+                <span className="text-emerald-400 text-sm animate-pulse">
+                  {applyResult > 0 ? `Updated ${applyResult} transactions` : 'No transactions to update'}
+                </span>
+              )}
+              <button
+                onClick={handleApplyRules}
+                disabled={applying || rules.length === 0}
+                className="flex items-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-xl text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {applying ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Zap className="w-4 h-4" />
+                )}
+                Apply to Existing
+              </button>
+              <button
+                onClick={() => setShowCreateModal(true)}
+                className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-black font-medium px-4 py-2.5 rounded-xl transition-colors"
+              >
+                <Plus className="w-5 h-5" />
+                New Rule
+              </button>
+            </div>
+          </div>
 
       {/* Suggested Patterns */}
       {suggestedPatterns.length > 0 && (
@@ -2044,9 +2175,107 @@ function RulesTab({
             const success = await onCreateRule(keyword, category, matchType)
             if (success) setShowCreateModal(false)
           }}
-          categories={categories}
+          categories={categoryNames}
         />
       )}
+      </>
+      )}
+    </div>
+  )
+}
+
+// Create Category Modal
+function CreateCategoryModal({ 
+  onClose, 
+  onSave, 
+  colorOptions,
+  existingCategories
+}: { 
+  onClose: () => void
+  onSave: (name: string, color: string) => void
+  colorOptions: { name: string; class: string }[]
+  existingCategories: string[]
+}) {
+  const [name, setName] = useState('')
+  const [color, setColor] = useState('purple')
+  const [error, setError] = useState('')
+
+  const handleSave = () => {
+    if (!name.trim()) {
+      setError('Category name is required')
+      return
+    }
+    if (existingCategories.some(c => c.toLowerCase() === name.toLowerCase())) {
+      setError('Category already exists')
+      return
+    }
+    onSave(name.trim(), color)
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+        <div className="p-5 border-b border-zinc-800 flex items-center justify-between">
+          <h3 className="text-lg font-semibold">Create Category</h3>
+          <button onClick={onClose} className="p-2 hover:bg-zinc-800 rounded-lg">
+            <X className="w-5 h-5 text-zinc-400" />
+          </button>
+        </div>
+        
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="block text-zinc-400 text-sm mb-2">Category Name</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => { setName(e.target.value); setError('') }}
+              placeholder="e.g., Marketing, Inventory, Legal"
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 focus:outline-none focus:border-emerald-500"
+              autoFocus
+            />
+            {error && <p className="text-red-400 text-xs mt-1">{error}</p>}
+          </div>
+
+          <div>
+            <label className="block text-zinc-400 text-sm mb-2">Color</label>
+            <div className="grid grid-cols-6 gap-2">
+              {colorOptions.map((opt) => (
+                <button
+                  key={opt.name}
+                  onClick={() => setColor(opt.name)}
+                  className={`w-10 h-10 rounded-lg ${opt.class} transition-all ${
+                    color === opt.name 
+                      ? 'ring-2 ring-white ring-offset-2 ring-offset-zinc-900 scale-110' 
+                      : 'hover:scale-105'
+                  }`}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Preview */}
+          <div className="bg-zinc-800/50 rounded-xl p-4">
+            <p className="text-zinc-500 text-xs mb-2">Preview</p>
+            <div className="flex items-center gap-2">
+              <div className={`w-4 h-4 rounded-full ${colorOptions.find(c => c.name === color)?.class}`} />
+              <span className="font-medium">{name || 'Category Name'}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-5 border-t border-zinc-800 flex gap-3">
+          <button onClick={onClose} className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-medium transition-colors">
+            Cancel
+          </button>
+          <button 
+            onClick={handleSave}
+            disabled={!name.trim()}
+            className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Create Category
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -2174,11 +2403,29 @@ export default function Dashboard() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [statements, setStatements] = useState<{ id: string; filename: string; bank: string; period: string; transactions_count: number; created_at: string }[]>([])
   const [categorizationRules, setCategorizationRules] = useState<CategorizationRule[]>([])
+  const [customCategories, setCustomCategories] = useState<Category[]>([])
   const [showUploadModal, setShowUploadModal] = useState(false)
   const [showAddMemberModal, setShowAddMemberModal] = useState(false)
   const [showManageDataModal, setShowManageDataModal] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+
+  // Default categories with colors
+  const defaultCategories = [
+    { id: 'default-ads', name: 'Ads', color: 'purple' },
+    { id: 'default-software', name: 'Software', color: 'cyan' },
+    { id: 'default-payroll', name: 'Payroll', color: 'blue' },
+    { id: 'default-fees', name: 'Fees', color: 'amber' },
+    { id: 'default-shipping', name: 'Shipping', color: 'orange' },
+    { id: 'default-products', name: 'Products', color: 'pink' },
+    { id: 'default-taxes', name: 'Taxes', color: 'red' },
+    { id: 'default-operations', name: 'Operations', color: 'indigo' },
+    { id: 'default-refunds', name: 'Refunds', color: 'emerald' },
+    { id: 'default-other', name: 'Other', color: 'zinc' },
+  ]
+
+  // All categories (default + custom)
+  const allCategories = [...defaultCategories, ...customCategories]
 
   const supabase = createClient()
 
@@ -2308,6 +2555,16 @@ export default function Dashboard() {
       
       if (!rulesError && rulesData) {
         setCategorizationRules(rulesData as CategorizationRule[])
+      }
+
+      // Load custom categories
+      const { data: catData, error: catError } = await (supabase
+        .from('categories') as any)
+        .select('*')
+        .order('name', { ascending: true })
+      
+      if (!catError && catData) {
+        setCustomCategories(catData as Category[])
       }
     } catch (err) {
       console.error('Error loading data:', err)
@@ -2626,6 +2883,54 @@ export default function Dashboard() {
     return updatedCount
   }
 
+  // ============================================
+  // CATEGORY MANAGEMENT
+  // ============================================
+  const handleCreateCategory = async (name: string, color: string) => {
+    // Check if category already exists
+    if (allCategories.some(c => c.name.toLowerCase() === name.toLowerCase())) {
+      return false
+    }
+
+    const newCategory: Category = {
+      id: crypto.randomUUID(),
+      name: name.trim(),
+      color
+    }
+    
+    const { error } = await (supabase
+      .from('categories') as any)
+      .insert(newCategory)
+    
+    if (error) {
+      console.error('Error creating category:', error)
+      return false
+    }
+    
+    setCustomCategories(prev => [...prev, newCategory])
+    return true
+  }
+
+  const handleDeleteCategory = async (categoryId: string) => {
+    // Don't allow deleting default categories
+    if (categoryId.startsWith('default-')) {
+      return false
+    }
+
+    const { error } = await (supabase
+      .from('categories') as any)
+      .delete()
+      .eq('id', categoryId)
+    
+    if (error) {
+      console.error('Error deleting category:', error)
+      return false
+    }
+    
+    setCustomCategories(prev => prev.filter(c => c.id !== categoryId))
+    return true
+  }
+
   const tabs = [
     { id: 'overview' as const, label: 'Overview', icon: LayoutDashboard },
     { id: 'transactions' as const, label: 'Transactions', icon: Receipt },
@@ -2716,7 +3021,7 @@ export default function Dashboard() {
           {activeTab === 'overview' && <OverviewTab data={aggregatedData} transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} loading={loading} categorizationRules={categorizationRules} onCreateRule={handleCreateRule} onApplyRules={handleApplyRulesToExisting} />}
           {activeTab === 'transactions' && <TransactionsTab transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} selectedYear={selectedYear} selectedMonths={selectedMonths} loading={loading} />}
           {activeTab === 'payroll' && <PayrollTab teamMembers={teamMembers} currentMonth={getPayrollMonth()} onUpdateVariable={handleUpdateVariable} onAddMember={() => setShowAddMemberModal(true)} loading={loading} />}
-          {activeTab === 'rules' && <RulesTab rules={categorizationRules} onCreateRule={handleCreateRule} onDeleteRule={handleDeleteRule} onUpdateRule={handleUpdateRule} transactions={transactions} onApplyRules={handleApplyRulesToExisting} loading={loading} />}
+          {activeTab === 'rules' && <RulesTab rules={categorizationRules} onCreateRule={handleCreateRule} onDeleteRule={handleDeleteRule} onUpdateRule={handleUpdateRule} transactions={transactions} onApplyRules={handleApplyRulesToExisting} loading={loading} categories={allCategories} customCategories={customCategories} onCreateCategory={handleCreateCategory} onDeleteCategory={handleDeleteCategory} />}
         </main>
       </div>
 
