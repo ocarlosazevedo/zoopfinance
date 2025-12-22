@@ -486,7 +486,7 @@ function LoadingSkeleton() {
 // ============================================
 // OVERVIEW TAB
 // ============================================
-function OverviewTab({ data, transactions, onUpload, loading, categorizationRules, onCreateRule, onApplyRules, allCategories }: { 
+function OverviewTab({ data, transactions, onUpload, loading, categorizationRules, onCreateRule, onApplyRules, allCategories, onBulkUpdateCategory }: { 
   data: { income: number; expenses: number; profit: number }
   transactions: Transaction[]
   onUpload: () => void
@@ -495,11 +495,19 @@ function OverviewTab({ data, transactions, onUpload, loading, categorizationRule
   onCreateRule?: (keyword: string, category: string, matchType: 'contains' | 'exact' | 'starts_with') => Promise<boolean>
   onApplyRules?: () => Promise<number>
   allCategories?: { id: string; name: string; color: string }[]
+  onBulkUpdateCategory?: (transactionIds: string[], category: string, createRule?: { keyword: string }) => Promise<boolean>
 }) {
   // State for transaction detail popup
   const [detailPopup, setDetailPopup] = useState<{ title: string; transactions: Transaction[]; category?: string } | null>(null)
   const [showQuickRule, setShowQuickRule] = useState<{ keyword: string; description: string } | null>(null)
   const [quickRuleCategory, setQuickRuleCategory] = useState('Other')
+  
+  // Bulk selection states
+  const [selectedTxIds, setSelectedTxIds] = useState<Set<string>>(new Set())
+  const [bulkCategory, setBulkCategory] = useState('')
+  const [popupSearch, setPopupSearch] = useState('')
+  const [expandedTxId, setExpandedTxId] = useState<string | null>(null)
+  const [bulkProcessing, setBulkProcessing] = useState(false)
   
   // Use allCategories if provided, sorted with Other at the end
   const categories = allCategories 
@@ -508,6 +516,67 @@ function OverviewTab({ data, transactions, onUpload, loading, categorizationRule
   
   const margin = data.income > 0 ? ((data.profit / data.income) * 100).toFixed(1) : '0'
   const hasData = data.income > 0 || data.expenses > 0
+
+  // Reset selection when popup closes
+  const closePopup = () => {
+    setDetailPopup(null)
+    setShowQuickRule(null)
+    setSelectedTxIds(new Set())
+    setPopupSearch('')
+    setExpandedTxId(null)
+    setBulkCategory('')
+  }
+
+  // Toggle transaction selection
+  const toggleTxSelection = (txId: string) => {
+    setSelectedTxIds(prev => {
+      const next = new Set(prev)
+      if (next.has(txId)) {
+        next.delete(txId)
+      } else {
+        next.add(txId)
+      }
+      return next
+    })
+  }
+
+  // Select/deselect all filtered transactions
+  const toggleSelectAll = (txs: Transaction[]) => {
+    const allSelected = txs.every(tx => selectedTxIds.has(tx.id))
+    if (allSelected) {
+      setSelectedTxIds(new Set())
+    } else {
+      setSelectedTxIds(new Set(txs.map(tx => tx.id)))
+    }
+  }
+
+  // Handle bulk categorization
+  const handleBulkCategorize = async () => {
+    if (!bulkCategory || selectedTxIds.size === 0 || !onBulkUpdateCategory) return
+    
+    setBulkProcessing(true)
+    
+    // Get selected transactions
+    const selectedTxs = detailPopup?.transactions.filter(tx => selectedTxIds.has(tx.id)) || []
+    
+    // Find common keyword from descriptions (use the first selected tx description as rule)
+    const firstTx = selectedTxs[0]
+    const keyword = firstTx?.description.toLowerCase().trim() || ''
+    
+    const success = await onBulkUpdateCategory(
+      Array.from(selectedTxIds), 
+      bulkCategory,
+      keyword ? { keyword } : undefined
+    )
+    
+    if (success) {
+      setSelectedTxIds(new Set())
+      setBulkCategory('')
+      closePopup()
+    }
+    
+    setBulkProcessing(false)
+  }
 
   // Show skeleton while loading
   if (loading) {
@@ -776,101 +845,246 @@ function OverviewTab({ data, transactions, onUpload, loading, categorizationRule
     <div className="space-y-6">
       {/* Transaction Detail Popup */}
       {detailPopup && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => { setDetailPopup(null); setShowQuickRule(null) }}>
-          <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-2xl max-h-[80vh] overflow-hidden" onClick={e => e.stopPropagation()}>
-            <div className="p-5 border-b border-zinc-800 flex items-center justify-between">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={closePopup}>
+          <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-3xl max-h-[85vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="p-5 border-b border-zinc-800 flex items-center justify-between flex-shrink-0">
               <div>
                 <h3 className="text-lg font-semibold">{detailPopup.title}</h3>
                 <p className="text-zinc-500 text-sm">{detailPopup.transactions.length} transactions</p>
               </div>
-              <button onClick={() => { setDetailPopup(null); setShowQuickRule(null) }} className="p-2 hover:bg-zinc-800 rounded-lg">
+              <button onClick={closePopup} className="p-2 hover:bg-zinc-800 rounded-lg">
                 <X className="w-5 h-5 text-zinc-400" />
               </button>
             </div>
-            
-            {/* Quick Rule Creator */}
-            {showQuickRule && onCreateRule && (
-              <div className="px-5 py-3 bg-emerald-500/10 border-b border-emerald-500/30">
-                <div className="flex items-center gap-3">
-                  <Tag className="w-4 h-4 text-emerald-400" />
-                  <span className="text-sm text-emerald-400">Create rule for "{showQuickRule.keyword}"</span>
-                  <div className="flex-1" />
-                  <div className="relative">
-                    <select
-                      value={quickRuleCategory}
-                      onChange={(e) => setQuickRuleCategory(e.target.value)}
-                      className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 pr-8 text-sm focus:outline-none focus:border-emerald-500 appearance-none cursor-pointer"
-                    >
-                      {categories.map(cat => (
-                        <option key={cat} value={cat}>{cat}</option>
-                      ))}
-                    </select>
-                    <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-500 pointer-events-none" />
-                  </div>
-                  <button
-                    onClick={() => handleQuickRule(showQuickRule.keyword, quickRuleCategory)}
-                    className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-black text-sm font-medium rounded-lg transition-colors"
-                  >
-                    Create
-                  </button>
-                  <button
-                    onClick={() => setShowQuickRule(null)}
-                    className="p-1.5 hover:bg-zinc-800 rounded-lg"
-                  >
-                    <X className="w-4 h-4 text-zinc-400" />
-                  </button>
+
+            {/* Search Bar */}
+            {detailPopup.category === 'Other' && (
+              <div className="px-5 py-3 border-b border-zinc-800 flex-shrink-0">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
+                  <input
+                    type="text"
+                    placeholder="Search transactions..."
+                    value={popupSearch}
+                    onChange={(e) => setPopupSearch(e.target.value)}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg pl-10 pr-4 py-2 text-sm focus:outline-none focus:border-zinc-600"
+                  />
                 </div>
               </div>
             )}
+
+            {/* Bulk Action Bar */}
+            {selectedTxIds.size > 0 && detailPopup.category === 'Other' && onBulkUpdateCategory && (
+              <div className="px-5 py-3 bg-emerald-500/10 border-b border-emerald-500/30 flex items-center gap-3 flex-shrink-0">
+                <span className="text-emerald-400 text-sm font-medium">{selectedTxIds.size} selected</span>
+                <div className="flex-1" />
+                <div className="relative">
+                  <select
+                    value={bulkCategory}
+                    onChange={(e) => setBulkCategory(e.target.value)}
+                    className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 pr-8 text-sm focus:outline-none focus:border-emerald-500 appearance-none cursor-pointer"
+                  >
+                    <option value="">Select category...</option>
+                    {categories.filter(c => c !== 'Other').map(cat => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                  <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-500 pointer-events-none" />
+                </div>
+                <button
+                  onClick={handleBulkCategorize}
+                  disabled={!bulkCategory || bulkProcessing}
+                  className="px-4 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-black text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {bulkProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Tag className="w-4 h-4" />}
+                  Categorize & Create Rule
+                </button>
+                <button
+                  onClick={() => setSelectedTxIds(new Set())}
+                  className="p-1.5 hover:bg-zinc-800 rounded-lg text-zinc-400"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
             
-            <div className="p-5 overflow-y-auto max-h-[60vh]">
-              <div className="space-y-2">
-                {detailPopup.transactions.map((tx, i) => {
-                  const originalCurrency = tx.originalCurrency || tx.currency || 'USD'
-                  const originalAmount = tx.originalAmount !== undefined ? tx.originalAmount : tx.amount
-                  const currInfo = currencyInfo[originalCurrency] || { symbol: originalCurrency, color: 'text-zinc-400' }
-                  const hasConversion = tx.originalCurrency && tx.originalCurrency !== 'USD'
-                  const keyword = extractKeyword(tx.description)
-                  
-                  return (
-                    <div key={i} className="flex items-center justify-between p-3 bg-zinc-800/50 rounded-lg hover:bg-zinc-800 transition-colors group">
-                      <div className="flex items-center gap-3 flex-1 min-w-0">
-                        <div className="w-8 h-8 rounded-lg bg-zinc-700/50 flex items-center justify-center text-zinc-400">
-                          <BankIcon bank={tx.bank} className="w-4 h-4" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="font-medium truncate">{tx.description}</p>
-                          <p className="text-zinc-500 text-sm">{tx.date} • {tx.bank}</p>
-                        </div>
+            {/* Transaction List */}
+            <div className="p-5 overflow-y-auto flex-1">
+              {(() => {
+                // Filter transactions by search
+                const filteredTxs = popupSearch 
+                  ? detailPopup.transactions.filter(tx => 
+                      tx.description.toLowerCase().includes(popupSearch.toLowerCase()) ||
+                      (tx.payee || '').toLowerCase().includes(popupSearch.toLowerCase())
+                    )
+                  : detailPopup.transactions
+                
+                const allSelected = filteredTxs.length > 0 && filteredTxs.every(tx => selectedTxIds.has(tx.id))
+
+                return (
+                  <div className="space-y-2">
+                    {/* Select All Header for Other category */}
+                    {detailPopup.category === 'Other' && filteredTxs.length > 0 && (
+                      <div className="flex items-center gap-3 pb-2 border-b border-zinc-800 mb-3">
+                        <button
+                          onClick={() => toggleSelectAll(filteredTxs)}
+                          className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+                            allSelected 
+                              ? 'bg-emerald-500 border-emerald-500' 
+                              : 'border-zinc-600 hover:border-zinc-500'
+                          }`}
+                        >
+                          {allSelected && <Check className="w-3 h-3 text-black" strokeWidth={3} />}
+                        </button>
+                        <span className="text-zinc-400 text-sm">
+                          {allSelected ? 'Deselect all' : 'Select all'} ({filteredTxs.length})
+                        </span>
                       </div>
-                      <div className="flex items-center gap-2">
-                        {onCreateRule && detailPopup.category === 'Other' && (
-                          <button
-                            onClick={() => {
-                              setShowQuickRule({ keyword, description: tx.description })
-                              setQuickRuleCategory('Other')
-                            }}
-                            className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-emerald-500/20 rounded-lg text-zinc-400 hover:text-emerald-400 transition-all"
-                            title="Create rule"
+                    )}
+
+                    {filteredTxs.map((tx) => {
+                      const originalCurrency = tx.originalCurrency || tx.currency || 'USD'
+                      const originalAmount = tx.originalAmount !== undefined ? tx.originalAmount : tx.amount
+                      const currInfo = currencyInfo[originalCurrency] || { symbol: originalCurrency, color: 'text-zinc-400' }
+                      const hasConversion = tx.originalCurrency && tx.originalCurrency !== 'USD'
+                      const isSelected = selectedTxIds.has(tx.id)
+                      const isExpanded = expandedTxId === tx.id
+                      
+                      return (
+                        <div key={tx.id} className="bg-zinc-800/50 rounded-lg overflow-hidden">
+                          {/* Main Row */}
+                          <div 
+                            className={`flex items-center p-3 hover:bg-zinc-800 transition-colors cursor-pointer ${isExpanded ? 'bg-zinc-800' : ''}`}
+                            onClick={() => setExpandedTxId(isExpanded ? null : tx.id)}
                           >
-                            <Plus className="w-4 h-4" />
-                          </button>
-                        )}
-                        <div className="text-right">
-                          <span className={`font-semibold ${tx.type === 'income' ? 'text-emerald-400' : 'text-red-400'}`}>
-                            {tx.type === 'income' ? '+' : '-'}{currInfo.symbol}{Math.abs(originalAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </span>
-                          {hasConversion && (
-                            <p className="text-zinc-500 text-xs">
-                              ≈ {formatCurrency(Math.abs(tx.amount))}
-                            </p>
+                            {/* Checkbox for Other category */}
+                            {detailPopup.category === 'Other' && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); toggleTxSelection(tx.id) }}
+                                className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors mr-3 flex-shrink-0 ${
+                                  isSelected 
+                                    ? 'bg-emerald-500 border-emerald-500' 
+                                    : 'border-zinc-600 hover:border-zinc-500'
+                                }`}
+                              >
+                                {isSelected && <Check className="w-3 h-3 text-black" strokeWidth={3} />}
+                              </button>
+                            )}
+                            
+                            <div className="w-8 h-8 rounded-lg bg-zinc-700/50 flex items-center justify-center text-zinc-400 flex-shrink-0">
+                              <BankIcon bank={tx.bank} className="w-4 h-4" />
+                            </div>
+                            <div className="flex-1 min-w-0 ml-3">
+                              <p className="font-medium truncate">{tx.description}</p>
+                              <p className="text-zinc-500 text-sm">{tx.date} • {tx.bank}</p>
+                            </div>
+                            <div className="text-right ml-3">
+                              <span className={`font-semibold ${tx.type === 'income' ? 'text-emerald-400' : 'text-red-400'}`}>
+                                {tx.type === 'income' ? '+' : '-'}{currInfo.symbol}{Math.abs(originalAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </span>
+                              {hasConversion && (
+                                <p className="text-zinc-500 text-xs">≈ {formatCurrency(Math.abs(tx.amount))}</p>
+                              )}
+                            </div>
+                            <ChevronDown className={`w-4 h-4 text-zinc-500 ml-2 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                          </div>
+
+                          {/* Expanded Details */}
+                          {isExpanded && (
+                            <div className="px-4 pb-4 pt-2 border-t border-zinc-700/50 bg-zinc-800/30">
+                              <div className="grid grid-cols-2 gap-3 text-sm">
+                                <div>
+                                  <p className="text-zinc-500 text-xs mb-1">Description</p>
+                                  <p className="font-medium">{tx.description}</p>
+                                </div>
+                                {tx.payee && (
+                                  <div>
+                                    <p className="text-zinc-500 text-xs mb-1">Payee</p>
+                                    <p className="font-medium">{tx.payee}</p>
+                                  </div>
+                                )}
+                                <div>
+                                  <p className="text-zinc-500 text-xs mb-1">Date</p>
+                                  <p className="font-medium">{tx.date}</p>
+                                </div>
+                                <div>
+                                  <p className="text-zinc-500 text-xs mb-1">Bank</p>
+                                  <p className="font-medium">{tx.bank}</p>
+                                </div>
+                                {tx.account && (
+                                  <div>
+                                    <p className="text-zinc-500 text-xs mb-1">Account</p>
+                                    <p className="font-medium">{tx.account}</p>
+                                  </div>
+                                )}
+                                {tx.accountNumber && (
+                                  <div>
+                                    <p className="text-zinc-500 text-xs mb-1">Account Number</p>
+                                    <p className="font-medium">{tx.accountNumber}</p>
+                                  </div>
+                                )}
+                                {tx.reference && (
+                                  <div>
+                                    <p className="text-zinc-500 text-xs mb-1">Reference</p>
+                                    <p className="font-medium font-mono text-xs">{tx.reference}</p>
+                                  </div>
+                                )}
+                                {tx.transactionType && (
+                                  <div>
+                                    <p className="text-zinc-500 text-xs mb-1">Type</p>
+                                    <p className="font-medium">{tx.transactionType}</p>
+                                  </div>
+                                )}
+                                {tx.status && (
+                                  <div>
+                                    <p className="text-zinc-500 text-xs mb-1">Status</p>
+                                    <p className="font-medium">{tx.status}</p>
+                                  </div>
+                                )}
+                                <div>
+                                  <p className="text-zinc-500 text-xs mb-1">Amount (USD)</p>
+                                  <p className={`font-medium ${tx.type === 'income' ? 'text-emerald-400' : 'text-red-400'}`}>
+                                    {formatCurrency(Math.abs(tx.amount))}
+                                  </p>
+                                </div>
+                                {hasConversion && (
+                                  <div>
+                                    <p className="text-zinc-500 text-xs mb-1">Original Amount</p>
+                                    <p className="font-medium">
+                                      {currInfo.symbol}{Math.abs(originalAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {originalCurrency}
+                                    </p>
+                                  </div>
+                                )}
+                                {tx.balance !== undefined && (
+                                  <div>
+                                    <p className="text-zinc-500 text-xs mb-1">Balance After</p>
+                                    <p className="font-medium">{formatCurrency(tx.balance)}</p>
+                                  </div>
+                                )}
+                                <div>
+                                  <p className="text-zinc-500 text-xs mb-1">Category</p>
+                                  <p className="font-medium">{tx.category}</p>
+                                </div>
+                                {tx.period && (
+                                  <div>
+                                    <p className="text-zinc-500 text-xs mb-1">Period</p>
+                                    <p className="font-medium">{tx.period}</p>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
                           )}
                         </div>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
+                      )
+                    })}
+
+                    {filteredTxs.length === 0 && (
+                      <p className="text-zinc-500 text-center py-8">No transactions found</p>
+                    )}
+                  </div>
+                )
+              })()}
             </div>
           </div>
         </div>
@@ -1701,14 +1915,26 @@ function TransactionDetailModal({ transaction: tx, onClose }: { transaction: Tra
 // ============================================
 // PAYROLL TAB
 // ============================================
-function PayrollTab({ teamMembers, currentMonth, onUpdateVariable, onAddMember, onDeleteMember, loading }: { teamMembers: TeamMember[]; currentMonth: string; onUpdateVariable: (id: string, variable: number, note: string) => void; onAddMember: () => void; onDeleteMember: (id: string) => void; loading: boolean }) {
+function PayrollTab({ teamMembers, currentMonth, onUpdateVariable, onAddMember, onDeleteMember, loading, payrollTransactions }: { 
+  teamMembers: TeamMember[]
+  currentMonth: string
+  onUpdateVariable: (id: string, variable: number, note: string) => void
+  onAddMember: () => void
+  onDeleteMember: (id: string) => void
+  loading: boolean
+  payrollTransactions: Transaction[]
+}) {
   const [editingMember, setEditingMember] = useState<TeamMember | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [showTransactions, setShowTransactions] = useState(false)
 
   const totals = teamMembers.reduce((acc, m) => {
     const comp = m.compensation[currentMonth] || { variable: 0 }
     return { base: acc.base + m.baseSalary, variable: acc.variable + comp.variable, total: acc.total + m.baseSalary + comp.variable }
   }, { base: 0, variable: 0, total: 0 })
+
+  // Calculate total from transactions
+  const txTotal = payrollTransactions.reduce((sum, tx) => sum + Math.abs(tx.amount), 0)
 
   // Show skeleton while loading
   if (loading) {
@@ -1731,7 +1957,7 @@ function PayrollTab({ teamMembers, currentMonth, onUpdateVariable, onAddMember, 
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="bg-purple-500/20 border border-purple-500/30 rounded-2xl p-5">
           <p className="text-purple-400/80 text-sm mb-1">Total Payroll</p>
           <p className="text-3xl font-bold">{formatCurrency(totals.total)}</p>
@@ -1744,7 +1970,43 @@ function PayrollTab({ teamMembers, currentMonth, onUpdateVariable, onAddMember, 
           <p className="text-amber-400/80 text-sm mb-1">Variable</p>
           <p className="text-2xl font-bold text-amber-400">{formatCurrency(totals.variable)}</p>
         </div>
+        <div 
+          onClick={() => setShowTransactions(!showTransactions)}
+          className="bg-blue-500/10 border border-blue-500/30 rounded-2xl p-5 cursor-pointer hover:bg-blue-500/20 transition-colors"
+        >
+          <p className="text-blue-400/80 text-sm mb-1">From Transactions</p>
+          <div className="flex items-center justify-between">
+            <p className="text-2xl font-bold text-blue-400">{formatCurrency(txTotal)}</p>
+            <span className="text-blue-400/60 text-sm">{payrollTransactions.length} tx</span>
+          </div>
+        </div>
       </div>
+
+      {/* Payroll Transactions Section */}
+      {showTransactions && payrollTransactions.length > 0 && (
+        <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl overflow-hidden">
+          <div className="p-4 border-b border-zinc-700 flex items-center justify-between">
+            <h3 className="font-semibold">Payroll Transactions</h3>
+            <button onClick={() => setShowTransactions(false)} className="text-zinc-400 hover:text-white">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="max-h-[300px] overflow-y-auto">
+            <div className="divide-y divide-zinc-800">
+              {payrollTransactions.map((tx) => (
+                <div key={tx.id} className="p-4 flex items-center justify-between hover:bg-zinc-800/30">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium truncate">{tx.description}</p>
+                    <p className="text-zinc-500 text-sm">{tx.date} • {tx.bank}</p>
+                  </div>
+                  <span className="text-red-400 font-semibold">-{formatCurrency(Math.abs(tx.amount))}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl overflow-hidden">
         <div className="p-4 border-b border-zinc-700 flex items-center justify-between">
           <h3 className="font-semibold">Team — {currentMonth}</h3>
@@ -1893,7 +2155,8 @@ function RulesTab({
   categories,
   customCategories,
   onCreateCategory,
-  onDeleteCategory
+  onDeleteCategory,
+  onMigrateAndDeleteCategory
 }: { 
   rules: CategorizationRule[]
   onCreateRule: (keyword: string, category: string, matchType: 'contains' | 'exact' | 'starts_with') => Promise<boolean>
@@ -1906,6 +2169,7 @@ function RulesTab({
   customCategories: Category[]
   onCreateCategory: (name: string, color: string) => Promise<boolean>
   onDeleteCategory: (id: string, name: string) => Promise<boolean>
+  onMigrateAndDeleteCategory: (categoryName: string, newCategory: string, categoryId: string) => Promise<boolean>
 }) {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showCreateCategoryModal, setShowCreateCategoryModal] = useState(false)
@@ -1913,6 +2177,12 @@ function RulesTab({
   const [searchTerm, setSearchTerm] = useState('')
   const [applying, setApplying] = useState(false)
   const [applyResult, setApplyResult] = useState<number | null>(null)
+  
+  // Category deletion states
+  const [pendingDeletions, setPendingDeletions] = useState<Set<string>>(new Set())
+  const [migrationModal, setMigrationModal] = useState<{ categoryId: string; categoryName: string; txCount: number } | null>(null)
+  const [migrationTarget, setMigrationTarget] = useState('')
+  const [savingCategories, setSavingCategories] = useState(false)
 
   const categoryNames = categories.map(c => c.name)
 
@@ -1934,27 +2204,25 @@ function RulesTab({
     r.category.toLowerCase().includes(searchTerm.toLowerCase())
   )
 
-  // Suggest patterns from "Other" category transactions - use full descriptions
+  // All uncategorized transactions - group by description and sort by frequency
   const otherTransactions = transactions.filter(tx => tx.category === 'Other')
   
   // Group by similar descriptions (normalize and count)
   const descriptionGroups = otherTransactions.reduce((acc, tx) => {
     // Use a simplified key for grouping (lowercase, trimmed)
-    const key = tx.description.trim()
+    const key = tx.description.toLowerCase().trim()
     if (!acc[key]) {
-      acc[key] = { description: tx.description, count: 0 }
+      acc[key] = { description: tx.description, count: 0, transactions: [] }
     }
     acc[key].count++
+    acc[key].transactions.push(tx)
     return acc
-  }, {} as Record<string, { description: string; count: number }>)
+  }, {} as Record<string, { description: string; count: number; transactions: Transaction[] }>)
 
-  // Get top descriptions that appear multiple times and aren't already rules
-  const suggestedPatterns = Object.values(descriptionGroups)
-    .filter(item => item.count >= 2) // At least 2 occurrences
+  // Get ALL descriptions sorted by frequency (most repeated first)
+  const allUncategorizedPatterns = Object.values(descriptionGroups)
     .filter(item => !rules.some(r => item.description.toLowerCase().includes(r.keyword))) // Not covered by existing rule
     .sort((a, b) => b.count - a.count)
-    .slice(0, 5)
-    .map(item => [item.description, item.count] as [string, number])
 
   const handleApplyRules = async () => {
     setApplying(true)
@@ -2030,42 +2298,179 @@ function RulesTab({
               <h2 className="text-xl font-bold">Categories</h2>
               <p className="text-zinc-500 text-sm">{categories.length} categories • Organize your transactions</p>
             </div>
-            <button
-              onClick={() => setShowCreateCategoryModal(true)}
-              className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-black font-medium px-4 py-2.5 rounded-xl transition-colors"
-            >
-              <Plus className="w-5 h-5" />
-              New Category
-            </button>
+            <div className="flex items-center gap-3">
+              {pendingDeletions.size > 0 && (
+                <button
+                  onClick={async () => {
+                    setSavingCategories(true)
+                    for (const catName of pendingDeletions) {
+                      const cat = categories.find(c => c.name === catName)
+                      if (cat) {
+                        await onDeleteCategory(cat.id, cat.name)
+                      }
+                    }
+                    setPendingDeletions(new Set())
+                    setSavingCategories(false)
+                  }}
+                  disabled={savingCategories}
+                  className="flex items-center gap-2 bg-red-500 hover:bg-red-400 text-white font-medium px-4 py-2.5 rounded-xl transition-colors disabled:opacity-50"
+                >
+                  {savingCategories ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                  Delete {pendingDeletions.size} Categories
+                </button>
+              )}
+              {pendingDeletions.size > 0 && (
+                <button
+                  onClick={() => setPendingDeletions(new Set())}
+                  className="px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-xl text-sm font-medium transition-colors"
+                >
+                  Cancel
+                </button>
+              )}
+              <button
+                onClick={() => setShowCreateCategoryModal(true)}
+                className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-black font-medium px-4 py-2.5 rounded-xl transition-colors"
+              >
+                <Plus className="w-5 h-5" />
+                New Category
+              </button>
+            </div>
+          </div>
+
+          {/* Info about protected categories */}
+          <div className="bg-blue-500/10 border border-blue-500/30 rounded-xl p-4 text-sm">
+            <p className="text-blue-400">
+              <strong>Payroll</strong> and <strong>Other</strong> are protected categories and cannot be deleted. 
+              Payroll is linked to the Payroll tab.
+            </p>
           </div>
 
           {/* Categories Grid */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
             {categories.map((cat) => {
               const txCount = transactions.filter(tx => tx.category === cat.name).length
-              const isProtected = cat.name === 'Other' // Only Other is protected
+              const isProtected = cat.name === 'Other' || cat.name === 'Payroll'
+              const isPendingDelete = pendingDeletions.has(cat.name)
+              
               return (
                 <div 
                   key={cat.id} 
-                  className="bg-zinc-800/50 border border-zinc-700 rounded-xl p-4 hover:border-zinc-600 transition-colors group"
+                  className={`bg-zinc-800/50 border rounded-xl p-4 transition-all group ${
+                    isPendingDelete 
+                      ? 'border-red-500/50 bg-red-500/10' 
+                      : isProtected 
+                        ? 'border-zinc-700 opacity-80' 
+                        : 'border-zinc-700 hover:border-zinc-600'
+                  }`}
                 >
                   <div className="flex items-center gap-3 mb-3">
                     <div className={`w-4 h-4 rounded-full ${getCategoryColorClass(cat.color)}`} />
                     <span className="font-medium flex-1">{cat.name}</span>
-                    {!isProtected && (
+                    {isProtected ? (
+                      <span className="text-xs text-zinc-500 px-2 py-0.5 bg-zinc-700 rounded">Protected</span>
+                    ) : isPendingDelete ? (
                       <button
-                        onClick={() => onDeleteCategory(cat.id, cat.name)}
+                        onClick={() => {
+                          setPendingDeletions(prev => {
+                            const next = new Set(prev)
+                            next.delete(cat.name)
+                            return next
+                          })
+                        }}
+                        className="text-xs text-emerald-400 hover:text-emerald-300"
+                      >
+                        Undo
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          // Check if category has transactions
+                          if (txCount > 0) {
+                            setMigrationModal({ categoryId: cat.id, categoryName: cat.name, txCount })
+                            setMigrationTarget('')
+                          } else {
+                            setPendingDeletions(prev => new Set([...prev, cat.name]))
+                          }
+                        }}
                         className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-500/20 rounded-lg text-zinc-400 hover:text-red-400 transition-all"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
                     )}
                   </div>
-                  <p className="text-zinc-500 text-sm">{txCount} transactions</p>
+                  <p className={`text-sm ${isPendingDelete ? 'text-red-400 line-through' : 'text-zinc-500'}`}>
+                    {txCount} transactions
+                    {cat.name === 'Payroll' && ' • Linked to Payroll tab'}
+                  </p>
                 </div>
               )
             })}
           </div>
+
+          {/* Migration Modal */}
+          {migrationModal && (
+            <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setMigrationModal(null)}>
+              <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+                <div className="p-5 border-b border-zinc-800">
+                  <h3 className="text-lg font-semibold">Migrate Transactions</h3>
+                  <p className="text-zinc-500 text-sm mt-1">
+                    "{migrationModal.categoryName}" has <strong>{migrationModal.txCount}</strong> transactions. 
+                    Select a new category before deleting.
+                  </p>
+                </div>
+                
+                <div className="p-5 space-y-4">
+                  <div>
+                    <label className="block text-zinc-400 text-sm mb-2">Move transactions to:</label>
+                    <div className="relative">
+                      <select
+                        value={migrationTarget}
+                        onChange={(e) => setMigrationTarget(e.target.value)}
+                        className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 pr-10 focus:outline-none focus:border-emerald-500 appearance-none cursor-pointer"
+                      >
+                        <option value="">Select category...</option>
+                        {categories
+                          .filter(c => c.name !== migrationModal.categoryName)
+                          .map(cat => (
+                            <option key={cat.id} value={cat.name}>{cat.name}</option>
+                          ))}
+                      </select>
+                      <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-5 border-t border-zinc-800 flex gap-3">
+                  <button 
+                    onClick={() => setMigrationModal(null)} 
+                    className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-medium transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    onClick={async () => {
+                      if (!migrationTarget) return
+                      setSavingCategories(true)
+                      const success = await onMigrateAndDeleteCategory(
+                        migrationModal.categoryName,
+                        migrationTarget,
+                        migrationModal.categoryId
+                      )
+                      setSavingCategories(false)
+                      if (success) {
+                        setMigrationModal(null)
+                      }
+                    }}
+                    disabled={!migrationTarget || savingCategories}
+                    className="flex-1 py-3 bg-red-500 hover:bg-red-400 text-white font-semibold rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {savingCategories && <Loader2 className="w-4 h-4 animate-spin" />}
+                    Migrate & Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Create Category Modal */}
           {showCreateCategoryModal && (
@@ -2120,29 +2525,35 @@ function RulesTab({
           </div>
 
       {/* Suggested Patterns */}
-      {suggestedPatterns.length > 0 && (
+      {allUncategorizedPatterns.length > 0 && (
         <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5">
           <div className="flex items-center gap-2 mb-3">
             <Zap className="w-5 h-5 text-amber-400" />
-            <h3 className="font-semibold text-amber-400">Repeated Transactions</h3>
-            <span className="text-zinc-500 text-sm ml-auto">{otherTransactions.length} uncategorized</span>
+            <h3 className="font-semibold text-amber-400">Uncategorized Transactions</h3>
+            <span className="text-zinc-500 text-sm ml-auto">{otherTransactions.length} total • sorted by frequency</span>
           </div>
-          <div className="space-y-2">
-            {suggestedPatterns.map(([description, count]) => (
+          <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2">
+            {allUncategorizedPatterns.map((item) => (
               <button
-                key={description}
+                key={item.description}
                 onClick={() => {
                   setShowCreateModal(true)
                   // Pre-fill the keyword with full description
                   setTimeout(() => {
                     const input = document.getElementById('rule-keyword') as HTMLInputElement
-                    if (input) input.value = description.toLowerCase()
+                    if (input) input.value = item.description.toLowerCase()
                   }, 100)
                 }}
                 className="w-full flex items-center justify-between gap-3 px-4 py-3 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-sm transition-colors text-left"
               >
-                <span className="font-medium truncate flex-1">{description}</span>
-                <span className="text-zinc-500 whitespace-nowrap">{count}x</span>
+                <span className="font-medium truncate flex-1">{item.description}</span>
+                <span className={`whitespace-nowrap px-2 py-0.5 rounded text-xs ${
+                  item.count > 5 ? 'bg-red-500/20 text-red-400' :
+                  item.count > 2 ? 'bg-amber-500/20 text-amber-400' :
+                  'bg-zinc-700 text-zinc-400'
+                }`}>
+                  {item.count}x
+                </span>
                 <Plus className="w-4 h-4 text-emerald-400 flex-shrink-0" />
               </button>
             ))}
@@ -2983,6 +3394,46 @@ export default function Dashboard() {
     return updatedCount
   }
 
+  // Bulk update transaction categories and optionally create a rule
+  const handleBulkUpdateCategory = async (transactionIds: string[], category: string, createRule?: { keyword: string }) => {
+    setSaving(true)
+    try {
+      // Update all selected transactions
+      for (const txId of transactionIds) {
+        await (supabase
+          .from('transactions') as any)
+          .update({ category })
+          .eq('id', txId)
+      }
+
+      // Create rule if keyword provided
+      if (createRule?.keyword) {
+        const newRule: CategorizationRule = {
+          id: crypto.randomUUID(),
+          keyword: createRule.keyword.toLowerCase().trim(),
+          category,
+          match_type: 'contains',
+          priority: categorizationRules.length + 1
+        }
+        
+        await (supabase
+          .from('categorization_rules') as any)
+          .insert(newRule)
+        
+        setCategorizationRules(prev => [...prev, newRule])
+      }
+
+      // Reload data
+      await loadData()
+      return true
+    } catch (err) {
+      console.error('Error bulk updating:', err)
+      return false
+    } finally {
+      setSaving(false)
+    }
+  }
+
   // ============================================
   // CATEGORY MANAGEMENT
   // ============================================
@@ -3031,6 +3482,38 @@ export default function Dashboard() {
     
     setCustomCategories(prev => prev.filter(c => c.id !== categoryId))
     return true
+  }
+
+  // Migrate transactions to new category and then delete the old category
+  const handleMigrateAndDeleteCategory = async (categoryName: string, newCategory: string, categoryId: string) => {
+    setSaving(true)
+    try {
+      // Update all transactions with this category to new category
+      const { error: updateError } = await (supabase
+        .from('transactions') as any)
+        .update({ category: newCategory })
+        .eq('category', categoryName)
+      
+      if (updateError) {
+        console.error('Error migrating transactions:', updateError)
+        return false
+      }
+
+      // Delete the category
+      const deleted = await handleDeleteCategory(categoryId, categoryName)
+      
+      if (deleted) {
+        // Reload data to reflect changes
+        await loadData()
+      }
+      
+      return deleted
+    } catch (err) {
+      console.error('Error in migrate and delete:', err)
+      return false
+    } finally {
+      setSaving(false)
+    }
   }
 
   const tabs = [
@@ -3120,10 +3603,10 @@ export default function Dashboard() {
 
         {/* Page Content */}
         <main className="p-6">
-          {activeTab === 'overview' && <OverviewTab data={aggregatedData} transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} loading={loading} categorizationRules={categorizationRules} onCreateRule={handleCreateRule} onApplyRules={handleApplyRulesToExisting} allCategories={allCategories} />}
+          {activeTab === 'overview' && <OverviewTab data={aggregatedData} transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} loading={loading} categorizationRules={categorizationRules} onCreateRule={handleCreateRule} onApplyRules={handleApplyRulesToExisting} allCategories={allCategories} onBulkUpdateCategory={handleBulkUpdateCategory} />}
           {activeTab === 'transactions' && <TransactionsTab transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} selectedYear={selectedYear} selectedMonths={selectedMonths} loading={loading} />}
-          {activeTab === 'payroll' && <PayrollTab teamMembers={teamMembers} currentMonth={getPayrollMonth()} onUpdateVariable={handleUpdateVariable} onAddMember={() => setShowAddMemberModal(true)} onDeleteMember={handleDeleteMember} loading={loading} />}
-          {activeTab === 'rules' && <RulesTab rules={categorizationRules} onCreateRule={handleCreateRule} onDeleteRule={handleDeleteRule} onUpdateRule={handleUpdateRule} transactions={transactions} onApplyRules={handleApplyRulesToExisting} loading={loading} categories={allCategories} customCategories={customCategories} onCreateCategory={handleCreateCategory} onDeleteCategory={handleDeleteCategory} />}
+          {activeTab === 'payroll' && <PayrollTab teamMembers={teamMembers} currentMonth={getPayrollMonth()} onUpdateVariable={handleUpdateVariable} onAddMember={() => setShowAddMemberModal(true)} onDeleteMember={handleDeleteMember} loading={loading} payrollTransactions={filteredTransactions.filter(tx => tx.category === 'Payroll')} />}
+          {activeTab === 'rules' && <RulesTab rules={categorizationRules} onCreateRule={handleCreateRule} onDeleteRule={handleDeleteRule} onUpdateRule={handleUpdateRule} transactions={transactions} onApplyRules={handleApplyRulesToExisting} loading={loading} categories={allCategories} customCategories={customCategories} onCreateCategory={handleCreateCategory} onDeleteCategory={handleDeleteCategory} onMigrateAndDeleteCategory={handleMigrateAndDeleteCategory} />}
         </main>
       </div>
 
