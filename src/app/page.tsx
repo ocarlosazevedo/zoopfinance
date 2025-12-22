@@ -1125,12 +1125,22 @@ function parseCSVLocally(csvContent: string, fileName: string, teamMembers: Team
       let category: string
       const txTypeLower = txType.toLowerCase()
       
+      // Check if payee indicates transfer from another bank (Revolut → Relay)
+      const isFromOtherBank = /^(revolut|relay)$/i.test(payee)
+      
       if (txTypeLower === 'spend') {
         type = 'expense'
         category = detectCategory(rawDesc, payee)  // Category by Payee (Facebook→Ads, etc)
       } else if (txTypeLower === 'receive') {
-        type = 'income'
-        category = 'Sales'  // All income is Sales
+        if (isFromOtherBank) {
+          // Money coming from Revolut or between Relay accounts = internal
+          type = 'internal'
+          category = 'Transfer'
+        } else {
+          // Real income from external sources (Cartpanda, Shopify, etc)
+          type = 'income'
+          category = 'Sales'
+        }
       } else if (txTypeLower.includes('transfer')) {
         type = 'internal'
         category = 'Transfer'  // All transfers are internal
