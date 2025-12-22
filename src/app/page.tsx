@@ -1776,16 +1776,17 @@ export default function Dashboard() {
 
       console.log('=== SAVE DEBUG ===')
       console.log('Period:', period)
+      console.log('Bank:', bank)
       console.log('Transactions to save:', txToInsert.length)
       console.log('Unique IDs:', new Set(txToInsert.map(t => t.id)).size)
-      console.log('Sample IDs:', txToInsert.slice(0, 3).map(t => t.id))
 
-      // Delete existing transactions for this period first (to avoid conflicts)
-      console.log('Deleting existing transactions for period:', period)
+      // Delete existing transactions for this period AND bank only (to allow multiple banks)
+      console.log('Deleting existing transactions for period:', period, 'bank:', bank)
       const { error: deleteError } = await supabase
         .from('transactions')
         .delete()
         .eq('period', period)
+        .eq('bank', bank)
       
       console.log('Delete error:', deleteError)
       
