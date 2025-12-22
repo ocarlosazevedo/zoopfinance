@@ -1,12 +1,21 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Upload, Calendar, LayoutDashboard, Receipt, Users, ChevronDown, ChevronLeft, ChevronRight, Plus, Pencil, X, FileUp, UserPlus, DollarSign, PoundSterling, Euro, Building2, CreditCard, Landmark, Loader2, Banknote, Check } from 'lucide-react'
+import { Upload, Calendar, LayoutDashboard, Receipt, Users, ChevronDown, ChevronLeft, ChevronRight, Plus, Pencil, X, FileUp, UserPlus, DollarSign, PoundSterling, Euro, Building2, CreditCard, Landmark, Loader2, Banknote, Check, Tag, Trash2, Search, Zap } from 'lucide-react'
 import { createClient } from '@/lib/supabase'
 
 // ============================================
 // TYPES
 // ============================================
+type CategorizationRule = {
+  id: string
+  keyword: string
+  category: string
+  match_type: 'contains' | 'exact' | 'starts_with'
+  priority: number
+  created_at?: string
+}
+
 type TeamMember = {
   id: string
   name: string
@@ -470,9 +479,21 @@ function LoadingSkeleton() {
 // ============================================
 // OVERVIEW TAB
 // ============================================
-function OverviewTab({ data, transactions, onUpload, loading }: { data: { income: number; expenses: number; profit: number }; transactions: Transaction[]; onUpload: () => void; loading: boolean }) {
+function OverviewTab({ data, transactions, onUpload, loading, categorizationRules, onCreateRule, onApplyRules }: { 
+  data: { income: number; expenses: number; profit: number }
+  transactions: Transaction[]
+  onUpload: () => void
+  loading: boolean
+  categorizationRules?: CategorizationRule[]
+  onCreateRule?: (keyword: string, category: string, matchType: 'contains' | 'exact' | 'starts_with') => Promise<boolean>
+  onApplyRules?: () => Promise<number>
+}) {
   // State for transaction detail popup
-  const [detailPopup, setDetailPopup] = useState<{ title: string; transactions: Transaction[] } | null>(null)
+  const [detailPopup, setDetailPopup] = useState<{ title: string; transactions: Transaction[]; category?: string } | null>(null)
+  const [showQuickRule, setShowQuickRule] = useState<{ keyword: string; description: string } | null>(null)
+  const [quickRuleCategory, setQuickRuleCategory] = useState('Other')
+  
+  const categories = ['Ads', 'Software', 'Payroll', 'Fees', 'Shipping', 'Products', 'Taxes', 'Operations', 'Refunds', 'Other']
   
   const margin = data.income > 0 ? ((data.profit / data.income) * 100).toFixed(1) : '0'
   const hasData = data.income > 0 || data.expenses > 0
@@ -688,21 +709,80 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
 
   const getCategoryColor = (cat: string) => categoryColors[cat] || categoryColors.Other
 
+  // Extract potential keyword from transaction description
+  const extractKeyword = (description: string): string => {
+    // Get first meaningful word (skip common words)
+    const words = description.toLowerCase().split(/\s+/)
+    const skipWords = ['from', 'to', 'the', 'and', 'for', 'via', 'por', 'com', 'de', 'para', 'dinheiro', 'adicionado', 'partir']
+    for (const word of words) {
+      if (word.length > 3 && !skipWords.includes(word)) {
+        return word
+      }
+    }
+    return words[0] || description.toLowerCase()
+  }
+
+  const handleQuickRule = async (keyword: string, category: string) => {
+    if (onCreateRule) {
+      const success = await onCreateRule(keyword, category, 'contains')
+      if (success && onApplyRules) {
+        await onApplyRules()
+      }
+      setShowQuickRule(null)
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Transaction Detail Popup */}
       {detailPopup && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setDetailPopup(null)}>
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => { setDetailPopup(null); setShowQuickRule(null) }}>
           <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-2xl max-h-[80vh] overflow-hidden" onClick={e => e.stopPropagation()}>
             <div className="p-5 border-b border-zinc-800 flex items-center justify-between">
               <div>
                 <h3 className="text-lg font-semibold">{detailPopup.title}</h3>
                 <p className="text-zinc-500 text-sm">{detailPopup.transactions.length} transactions</p>
               </div>
-              <button onClick={() => setDetailPopup(null)} className="p-2 hover:bg-zinc-800 rounded-lg">
+              <button onClick={() => { setDetailPopup(null); setShowQuickRule(null) }} className="p-2 hover:bg-zinc-800 rounded-lg">
                 <X className="w-5 h-5 text-zinc-400" />
               </button>
             </div>
+            
+            {/* Quick Rule Creator */}
+            {showQuickRule && onCreateRule && (
+              <div className="px-5 py-3 bg-emerald-500/10 border-b border-emerald-500/30">
+                <div className="flex items-center gap-3">
+                  <Tag className="w-4 h-4 text-emerald-400" />
+                  <span className="text-sm text-emerald-400">Create rule for "{showQuickRule.keyword}"</span>
+                  <div className="flex-1" />
+                  <div className="relative">
+                    <select
+                      value={quickRuleCategory}
+                      onChange={(e) => setQuickRuleCategory(e.target.value)}
+                      className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 pr-8 text-sm focus:outline-none focus:border-emerald-500 appearance-none cursor-pointer"
+                    >
+                      {categories.map(cat => (
+                        <option key={cat} value={cat}>{cat}</option>
+                      ))}
+                    </select>
+                    <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-500 pointer-events-none" />
+                  </div>
+                  <button
+                    onClick={() => handleQuickRule(showQuickRule.keyword, quickRuleCategory)}
+                    className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-black text-sm font-medium rounded-lg transition-colors"
+                  >
+                    Create
+                  </button>
+                  <button
+                    onClick={() => setShowQuickRule(null)}
+                    className="p-1.5 hover:bg-zinc-800 rounded-lg"
+                  >
+                    <X className="w-4 h-4 text-zinc-400" />
+                  </button>
+                </div>
+              </div>
+            )}
+            
             <div className="p-5 overflow-y-auto max-h-[60vh]">
               <div className="space-y-2">
                 {detailPopup.transactions.map((tx, i) => {
@@ -710,9 +790,10 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
                   const originalAmount = tx.originalAmount !== undefined ? tx.originalAmount : tx.amount
                   const currInfo = currencyInfo[originalCurrency] || { symbol: originalCurrency, color: 'text-zinc-400' }
                   const hasConversion = tx.originalCurrency && tx.originalCurrency !== 'USD'
+                  const keyword = extractKeyword(tx.description)
                   
                   return (
-                    <div key={i} className="flex items-center justify-between p-3 bg-zinc-800/50 rounded-lg hover:bg-zinc-800 transition-colors">
+                    <div key={i} className="flex items-center justify-between p-3 bg-zinc-800/50 rounded-lg hover:bg-zinc-800 transition-colors group">
                       <div className="flex items-center gap-3 flex-1 min-w-0">
                         <div className="w-8 h-8 rounded-lg bg-zinc-700/50 flex items-center justify-center text-zinc-400">
                           <BankIcon bank={tx.bank} className="w-4 h-4" />
@@ -722,15 +803,29 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
                           <p className="text-zinc-500 text-sm">{tx.date} • {tx.bank}</p>
                         </div>
                       </div>
-                      <div className="text-right ml-4">
-                        <span className={`font-semibold ${tx.type === 'income' ? 'text-emerald-400' : 'text-red-400'}`}>
-                          {tx.type === 'income' ? '+' : '-'}{currInfo.symbol}{Math.abs(originalAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </span>
-                        {hasConversion && (
-                          <p className="text-zinc-500 text-xs">
-                            ≈ {formatCurrency(Math.abs(tx.amount))}
-                          </p>
+                      <div className="flex items-center gap-2">
+                        {onCreateRule && detailPopup.category === 'Other' && (
+                          <button
+                            onClick={() => {
+                              setShowQuickRule({ keyword, description: tx.description })
+                              setQuickRuleCategory('Other')
+                            }}
+                            className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-emerald-500/20 rounded-lg text-zinc-400 hover:text-emerald-400 transition-all"
+                            title="Create rule"
+                          >
+                            <Plus className="w-4 h-4" />
+                          </button>
                         )}
+                        <div className="text-right">
+                          <span className={`font-semibold ${tx.type === 'income' ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {tx.type === 'income' ? '+' : '-'}{currInfo.symbol}{Math.abs(originalAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                          {hasConversion && (
+                            <p className="text-zinc-500 text-xs">
+                              ≈ {formatCurrency(Math.abs(tx.amount))}
+                            </p>
+                          )}
+                        </div>
                       </div>
                     </div>
                   )
@@ -778,7 +873,7 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
                 <div 
                   key={category} 
                   className="space-y-2 cursor-pointer hover:bg-zinc-700/30 -mx-2 px-2 py-1 rounded-lg transition-colors"
-                  onClick={() => setDetailPopup({ title: `${category} Expenses`, transactions: data.transactions })}
+                  onClick={() => setDetailPopup({ title: `${category} Expenses`, transactions: data.transactions, category })}
                 >
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-zinc-300">{category}</span>
@@ -1715,13 +1810,349 @@ function EditVariableModal({ member, month, currentValue, currentNote, onSave, o
 }
 
 // ============================================
+// RULES TAB
+// ============================================
+function RulesTab({ 
+  rules, 
+  onCreateRule, 
+  onDeleteRule, 
+  onUpdateRule, 
+  transactions,
+  onApplyRules,
+  loading 
+}: { 
+  rules: CategorizationRule[]
+  onCreateRule: (keyword: string, category: string, matchType: 'contains' | 'exact' | 'starts_with') => Promise<boolean>
+  onDeleteRule: (id: string) => Promise<boolean>
+  onUpdateRule: (id: string, updates: Partial<CategorizationRule>) => Promise<boolean>
+  transactions: Transaction[]
+  onApplyRules: () => Promise<number>
+  loading: boolean
+}) {
+  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [applying, setApplying] = useState(false)
+  const [applyResult, setApplyResult] = useState<number | null>(null)
+
+  const categories = ['Ads', 'Software', 'Payroll', 'Fees', 'Shipping', 'Products', 'Taxes', 'Operations', 'Refunds', 'Other']
+
+  // Count how many transactions each rule would match
+  const getRuleMatchCount = (rule: CategorizationRule) => {
+    return transactions.filter(tx => {
+      const searchText = `${tx.description} ${tx.payee || ''}`.toLowerCase()
+      switch (rule.match_type) {
+        case 'exact': return searchText === rule.keyword
+        case 'starts_with': return searchText.startsWith(rule.keyword)
+        default: return searchText.includes(rule.keyword)
+      }
+    }).length
+  }
+
+  // Filter rules by search
+  const filteredRules = rules.filter(r => 
+    r.keyword.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    r.category.toLowerCase().includes(searchTerm.toLowerCase())
+  )
+
+  // Suggest patterns from "Other" category transactions
+  const otherTransactions = transactions.filter(tx => tx.category === 'Other')
+  const suggestedPatterns = Object.entries(
+    otherTransactions.reduce((acc, tx) => {
+      // Extract potential keywords from description
+      const words = tx.description.toLowerCase().split(/\s+/).filter(w => w.length > 3)
+      words.forEach(word => {
+        // Skip common words
+        if (['from', 'para', 'the', 'and', 'for', 'via', 'por', 'com'].includes(word)) return
+        if (!acc[word]) acc[word] = 0
+        acc[word]++
+      })
+      return acc
+    }, {} as Record<string, number>)
+  )
+    .filter(([word, count]) => count >= 2) // At least 2 occurrences
+    .filter(([word]) => !rules.some(r => r.keyword === word)) // Not already a rule
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+
+  const handleApplyRules = async () => {
+    setApplying(true)
+    setApplyResult(null)
+    const count = await onApplyRules()
+    setApplyResult(count)
+    setApplying(false)
+    setTimeout(() => setApplyResult(null), 3000)
+  }
+
+  if (loading) {
+    return <LoadingSkeleton />
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-bold">Categorization Rules</h2>
+          <p className="text-zinc-500 text-sm">{rules.length} rules • Auto-categorize transactions based on keywords</p>
+        </div>
+        <div className="flex items-center gap-3">
+          {applyResult !== null && (
+            <span className="text-emerald-400 text-sm animate-pulse">
+              {applyResult > 0 ? `Updated ${applyResult} transactions` : 'No transactions to update'}
+            </span>
+          )}
+          <button
+            onClick={handleApplyRules}
+            disabled={applying || rules.length === 0}
+            className="flex items-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-xl text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {applying ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Zap className="w-4 h-4" />
+            )}
+            Apply to Existing
+          </button>
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-black font-medium px-4 py-2.5 rounded-xl transition-colors"
+          >
+            <Plus className="w-5 h-5" />
+            New Rule
+          </button>
+        </div>
+      </div>
+
+      {/* Suggested Patterns */}
+      {suggestedPatterns.length > 0 && (
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <Zap className="w-5 h-5 text-amber-400" />
+            <h3 className="font-semibold text-amber-400">Suggested Patterns</h3>
+            <span className="text-zinc-500 text-sm ml-auto">{otherTransactions.length} uncategorized transactions</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {suggestedPatterns.map(([word, count]) => (
+              <button
+                key={word}
+                onClick={() => {
+                  setShowCreateModal(true)
+                  // Pre-fill the keyword
+                  setTimeout(() => {
+                    const input = document.getElementById('rule-keyword') as HTMLInputElement
+                    if (input) input.value = word
+                  }, 100)
+                }}
+                className="flex items-center gap-2 px-3 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-sm transition-colors"
+              >
+                <span className="font-medium">{word}</span>
+                <span className="text-zinc-500">{count}x</span>
+                <Plus className="w-3 h-3 text-emerald-400" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Search */}
+      <div className="relative">
+        <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-500" />
+        <input
+          type="text"
+          placeholder="Search rules..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          className="w-full bg-zinc-800/50 border border-zinc-700 rounded-xl pl-12 pr-4 py-3 focus:outline-none focus:border-zinc-600"
+        />
+      </div>
+
+      {/* Rules List */}
+      <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl overflow-hidden">
+        {/* Table Header */}
+        <div className="grid grid-cols-12 gap-4 px-5 py-3 bg-zinc-800 text-xs text-zinc-500 uppercase tracking-wider">
+          <div className="col-span-4">Keyword</div>
+          <div className="col-span-2">Match Type</div>
+          <div className="col-span-2">Category</div>
+          <div className="col-span-2 text-right">Matches</div>
+          <div className="col-span-2 text-right">Actions</div>
+        </div>
+
+        {/* Rules */}
+        {filteredRules.length === 0 ? (
+          <div className="p-12 text-center">
+            <Tag className="w-12 h-12 text-zinc-600 mx-auto mb-4" />
+            <p className="text-zinc-400 font-medium mb-2">No rules yet</p>
+            <p className="text-zinc-600 text-sm mb-4">Create rules to auto-categorize your transactions</p>
+            <button
+              onClick={() => setShowCreateModal(true)}
+              className="bg-emerald-500 hover:bg-emerald-400 text-black font-medium px-4 py-2 rounded-lg transition-colors"
+            >
+              Create First Rule
+            </button>
+          </div>
+        ) : (
+          <div className="divide-y divide-zinc-800">
+            {filteredRules.map((rule) => {
+              const matchCount = getRuleMatchCount(rule)
+              return (
+                <div key={rule.id} className="grid grid-cols-12 gap-4 px-5 py-4 items-center hover:bg-zinc-800/50 transition-colors">
+                  <div className="col-span-4">
+                    <span className="font-mono text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded">
+                      {rule.keyword}
+                    </span>
+                  </div>
+                  <div className="col-span-2">
+                    <span className="text-zinc-400 text-sm capitalize">{rule.match_type.replace('_', ' ')}</span>
+                  </div>
+                  <div className="col-span-2">
+                    <span className={`px-2 py-1 rounded-lg text-xs font-medium ${
+                      rule.category === 'Ads' ? 'bg-purple-500/20 text-purple-400' :
+                      rule.category === 'Software' ? 'bg-cyan-500/20 text-cyan-400' :
+                      rule.category === 'Payroll' ? 'bg-blue-500/20 text-blue-400' :
+                      rule.category === 'Fees' ? 'bg-amber-500/20 text-amber-400' :
+                      rule.category === 'Shipping' ? 'bg-orange-500/20 text-orange-400' :
+                      'bg-zinc-500/20 text-zinc-400'
+                    }`}>
+                      {rule.category}
+                    </span>
+                  </div>
+                  <div className="col-span-2 text-right">
+                    <span className={`text-sm ${matchCount > 0 ? 'text-emerald-400' : 'text-zinc-500'}`}>
+                      {matchCount} transactions
+                    </span>
+                  </div>
+                  <div className="col-span-2 flex justify-end gap-2">
+                    <button
+                      onClick={() => onDeleteRule(rule.id)}
+                      className="p-2 hover:bg-red-500/20 rounded-lg text-zinc-400 hover:text-red-400 transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Create Rule Modal */}
+      {showCreateModal && (
+        <CreateRuleModal
+          onClose={() => setShowCreateModal(false)}
+          onSave={async (keyword, category, matchType) => {
+            const success = await onCreateRule(keyword, category, matchType)
+            if (success) setShowCreateModal(false)
+          }}
+          categories={categories}
+        />
+      )}
+    </div>
+  )
+}
+
+// Create Rule Modal
+function CreateRuleModal({ 
+  onClose, 
+  onSave, 
+  categories,
+  initialKeyword = ''
+}: { 
+  onClose: () => void
+  onSave: (keyword: string, category: string, matchType: 'contains' | 'exact' | 'starts_with') => void
+  categories: string[]
+  initialKeyword?: string
+}) {
+  const [keyword, setKeyword] = useState(initialKeyword)
+  const [category, setCategory] = useState('Other')
+  const [matchType, setMatchType] = useState<'contains' | 'exact' | 'starts_with'>('contains')
+
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+        <div className="p-5 border-b border-zinc-800 flex items-center justify-between">
+          <h3 className="text-lg font-semibold">Create Rule</h3>
+          <button onClick={onClose} className="p-2 hover:bg-zinc-800 rounded-lg">
+            <X className="w-5 h-5 text-zinc-400" />
+          </button>
+        </div>
+        
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="block text-zinc-400 text-sm mb-2">Keyword</label>
+            <input
+              id="rule-keyword"
+              type="text"
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+              placeholder="e.g., klaviyo, facebook, stripe"
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 focus:outline-none focus:border-emerald-500"
+              autoFocus
+            />
+            <p className="text-zinc-600 text-xs mt-1">Case-insensitive match on description and payee</p>
+          </div>
+
+          <div>
+            <label className="block text-zinc-400 text-sm mb-2">Match Type</label>
+            <div className="grid grid-cols-3 gap-2">
+              {(['contains', 'starts_with', 'exact'] as const).map((type) => (
+                <button
+                  key={type}
+                  onClick={() => setMatchType(type)}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    matchType === type 
+                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' 
+                      : 'bg-zinc-800 text-zinc-400 border border-zinc-700 hover:border-zinc-600'
+                  }`}
+                >
+                  {type === 'contains' ? 'Contains' : type === 'starts_with' ? 'Starts with' : 'Exact'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-zinc-400 text-sm mb-2">Category</label>
+            <div className="relative">
+              <select
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 pr-10 focus:outline-none focus:border-emerald-500 appearance-none cursor-pointer"
+              >
+                {categories.map(cat => (
+                  <option key={cat} value={cat}>{cat}</option>
+                ))}
+              </select>
+              <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
+            </div>
+          </div>
+        </div>
+
+        <div className="p-5 border-t border-zinc-800 flex gap-3">
+          <button onClick={onClose} className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-medium transition-colors">
+            Cancel
+          </button>
+          <button 
+            onClick={() => onSave(keyword, category, matchType)}
+            disabled={!keyword.trim()}
+            className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Create Rule
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ============================================
 // MAIN DASHBOARD
 // ============================================
 export default function Dashboard() {
-  const [activeTab, setActiveTab] = useState<'overview' | 'transactions' | 'payroll'>(() => {
+  const [activeTab, setActiveTab] = useState<'overview' | 'transactions' | 'payroll' | 'rules'>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('zoop-active-tab')
-      if (saved === 'overview' || saved === 'transactions' || saved === 'payroll') return saved
+      if (saved === 'overview' || saved === 'transactions' || saved === 'payroll' || saved === 'rules') return saved
     }
     return 'overview'
   })
@@ -1742,6 +2173,7 @@ export default function Dashboard() {
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [statements, setStatements] = useState<{ id: string; filename: string; bank: string; period: string; transactions_count: number; created_at: string }[]>([])
+  const [categorizationRules, setCategorizationRules] = useState<CategorizationRule[]>([])
   const [showUploadModal, setShowUploadModal] = useState(false)
   const [showAddMemberModal, setShowAddMemberModal] = useState(false)
   const [showManageDataModal, setShowManageDataModal] = useState(false)
@@ -1866,6 +2298,16 @@ export default function Dashboard() {
             compensation
           }
         }))
+      }
+
+      // Load categorization rules
+      const { data: rulesData, error: rulesError } = await (supabase
+        .from('categorization_rules') as any)
+        .select('*')
+        .order('priority', { ascending: false })
+      
+      if (!rulesError && rulesData) {
+        setCategorizationRules(rulesData as CategorizationRule[])
       }
     } catch (err) {
       console.error('Error loading data:', err)
@@ -2070,10 +2512,125 @@ export default function Dashboard() {
     setShowAddMemberModal(false)
   }
 
+  // ============================================
+  // CATEGORIZATION RULES MANAGEMENT
+  // ============================================
+  const handleCreateRule = async (keyword: string, category: string, matchType: 'contains' | 'exact' | 'starts_with' = 'contains') => {
+    const newRule: CategorizationRule = {
+      id: crypto.randomUUID(),
+      keyword: keyword.toLowerCase().trim(),
+      category,
+      match_type: matchType,
+      priority: categorizationRules.length + 1
+    }
+    
+    const { error } = await (supabase
+      .from('categorization_rules') as any)
+      .insert(newRule)
+    
+    if (error) {
+      console.error('Error creating rule:', error)
+      return false
+    }
+    
+    setCategorizationRules(prev => [...prev, newRule])
+    return true
+  }
+
+  const handleDeleteRule = async (ruleId: string) => {
+    const { error } = await (supabase
+      .from('categorization_rules') as any)
+      .delete()
+      .eq('id', ruleId)
+    
+    if (error) {
+      console.error('Error deleting rule:', error)
+      return false
+    }
+    
+    setCategorizationRules(prev => prev.filter(r => r.id !== ruleId))
+    return true
+  }
+
+  const handleUpdateRule = async (ruleId: string, updates: Partial<CategorizationRule>) => {
+    const { error } = await (supabase
+      .from('categorization_rules') as any)
+      .update(updates)
+      .eq('id', ruleId)
+    
+    if (error) {
+      console.error('Error updating rule:', error)
+      return false
+    }
+    
+    setCategorizationRules(prev => prev.map(r => r.id === ruleId ? { ...r, ...updates } : r))
+    return true
+  }
+
+  // Apply rules to existing transactions (retroactive)
+  const handleApplyRulesToExisting = async () => {
+    if (categorizationRules.length === 0) return 0
+    
+    setSaving(true)
+    let updatedCount = 0
+    
+    try {
+      // Get all transactions that could be re-categorized
+      const txsToUpdate = transactions.filter(tx => {
+        // Check if any rule matches
+        const matchingRule = categorizationRules.find(rule => {
+          const searchText = `${tx.description} ${tx.payee || ''}`.toLowerCase()
+          switch (rule.match_type) {
+            case 'exact': return searchText === rule.keyword
+            case 'starts_with': return searchText.startsWith(rule.keyword)
+            default: return searchText.includes(rule.keyword)
+          }
+        })
+        // Only update if a rule matches AND current category is different
+        return matchingRule && tx.category !== matchingRule.category
+      })
+      
+      // Update each matching transaction
+      for (const tx of txsToUpdate) {
+        const matchingRule = categorizationRules.find(rule => {
+          const searchText = `${tx.description} ${tx.payee || ''}`.toLowerCase()
+          switch (rule.match_type) {
+            case 'exact': return searchText === rule.keyword
+            case 'starts_with': return searchText.startsWith(rule.keyword)
+            default: return searchText.includes(rule.keyword)
+          }
+        })
+        
+        if (matchingRule) {
+          const { error } = await (supabase
+            .from('transactions') as any)
+            .update({ category: matchingRule.category })
+            .eq('id', tx.id)
+          
+          if (!error) {
+            updatedCount++
+          }
+        }
+      }
+      
+      // Reload data to reflect changes
+      if (updatedCount > 0) {
+        await loadData()
+      }
+    } catch (err) {
+      console.error('Error applying rules:', err)
+    } finally {
+      setSaving(false)
+    }
+    
+    return updatedCount
+  }
+
   const tabs = [
     { id: 'overview' as const, label: 'Overview', icon: LayoutDashboard },
     { id: 'transactions' as const, label: 'Transactions', icon: Receipt },
     { id: 'payroll' as const, label: 'Payroll', icon: Users },
+    { id: 'rules' as const, label: 'Rules', icon: Tag },
   ]
 
   return (
@@ -2156,9 +2713,10 @@ export default function Dashboard() {
 
         {/* Page Content */}
         <main className="p-6">
-          {activeTab === 'overview' && <OverviewTab data={aggregatedData} transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} loading={loading} />}
+          {activeTab === 'overview' && <OverviewTab data={aggregatedData} transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} loading={loading} categorizationRules={categorizationRules} onCreateRule={handleCreateRule} onApplyRules={handleApplyRulesToExisting} />}
           {activeTab === 'transactions' && <TransactionsTab transactions={filteredTransactions} onUpload={() => setShowUploadModal(true)} selectedYear={selectedYear} selectedMonths={selectedMonths} loading={loading} />}
           {activeTab === 'payroll' && <PayrollTab teamMembers={teamMembers} currentMonth={getPayrollMonth()} onUpdateVariable={handleUpdateVariable} onAddMember={() => setShowAddMemberModal(true)} loading={loading} />}
+          {activeTab === 'rules' && <RulesTab rules={categorizationRules} onCreateRule={handleCreateRule} onDeleteRule={handleDeleteRule} onUpdateRule={handleUpdateRule} transactions={transactions} onApplyRules={handleApplyRulesToExisting} loading={loading} />}
         </main>
       </div>
 
