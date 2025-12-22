@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Upload, Calendar, LayoutDashboard, Receipt, Users, ChevronDown, ChevronLeft, ChevronRight, Plus, Pencil, X, FileUp, UserPlus, DollarSign, PoundSterling, Euro, Building2, CreditCard, Landmark, Loader2, Banknote, Check, Tag, Trash2, Search, Zap } from 'lucide-react'
+import { Upload, Calendar, LayoutDashboard, Receipt, Users, ChevronDown, ChevronLeft, ChevronRight, Plus, Pencil, X, FileUp, UserPlus, DollarSign, PoundSterling, Euro, Building2, CreditCard, Landmark, Loader2, Banknote, Check, Tag, Trash2, Search, Zap, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react'
 import { createClient } from '@/lib/supabase'
 
 // ============================================
@@ -806,7 +806,7 @@ function OverviewTab({ data, transactions, onUpload, loading, categorizationRule
     Products: 'from-pink-500 to-pink-600',
     Taxes: 'from-red-500 to-red-600',
     Other: 'from-zinc-500 to-zinc-600',
-    Transfer: 'from-indigo-500 to-indigo-600',
+    'Internal Transfer': 'from-teal-500 to-teal-600',
     Refunds: 'from-emerald-500 to-emerald-600',
     Sales: 'from-emerald-500 to-emerald-600',
   }
@@ -1343,29 +1343,67 @@ function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths,
   const [bulkCategory, setBulkCategory] = useState('')
   const [bulkType, setBulkType] = useState('')
   const [bulkProcessing, setBulkProcessing] = useState(false)
+  
+  // Sorting state
+  const [sortField, setSortField] = useState<'date' | 'description' | 'category' | 'type' | 'amount'>('date')
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc')
 
-  // Use only active categories from allCategories
-  const categoryNames = allCategories.map(c => c.name)
+  // Use only active categories from allCategories, with Other last
+  const categoryNames = [...allCategories.filter(c => c.name !== 'Other').map(c => c.name), 'Other'].filter(name => allCategories.some(c => c.name === name))
 
   // Get the current period month info
   const monthNamesShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
   const currentMonth = selectedMonths.length === 1 ? selectedMonths[0] : new Date().getMonth()
   const daysInMonth = new Date(selectedYear, currentMonth + 1, 0).getDate()
 
-  const filtered = transactions.filter(t => {
-    if (filterType !== 'all' && t.type !== filterType) return false
-    if (filterCategory !== 'all' && t.category !== filterCategory) return false
-    
-    // Date filter within selected month - only apply when range is complete
-    if (filterDateFrom !== null && filterDateTo !== null) {
-      const txDate = new Date(t.date)
-      const txDay = txDate.getDate()
-      if (txDay < filterDateFrom || txDay > filterDateTo) return false
+  // Handle column sort
+  const handleSort = (field: 'date' | 'description' | 'category' | 'type' | 'amount') => {
+    if (sortField === field) {
+      setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortField(field)
+      setSortDirection(field === 'amount' ? 'desc' : 'asc')
     }
-    
-    if (search && !t.description.toLowerCase().includes(search.toLowerCase())) return false
-    return true
-  })
+  }
+
+  const filteredAndSorted = transactions
+    .filter(t => {
+      if (filterType !== 'all' && t.type !== filterType) return false
+      if (filterCategory !== 'all' && t.category !== filterCategory) return false
+      
+      // Date filter within selected month - only apply when range is complete
+      if (filterDateFrom !== null && filterDateTo !== null) {
+        const txDate = new Date(t.date)
+        const txDay = txDate.getDate()
+        if (txDay < filterDateFrom || txDay > filterDateTo) return false
+      }
+      
+      if (search && !t.description.toLowerCase().includes(search.toLowerCase())) return false
+      return true
+    })
+    .sort((a, b) => {
+      let comparison = 0
+      switch (sortField) {
+        case 'date':
+          comparison = new Date(a.date).getTime() - new Date(b.date).getTime()
+          break
+        case 'description':
+          comparison = a.description.localeCompare(b.description)
+          break
+        case 'category':
+          comparison = (a.category || '').localeCompare(b.category || '')
+          break
+        case 'type':
+          comparison = a.type.localeCompare(b.type)
+          break
+        case 'amount':
+          comparison = Math.abs(a.amount) - Math.abs(b.amount)
+          break
+      }
+      return sortDirection === 'asc' ? comparison : -comparison
+    })
+
+  const filtered = filteredAndSorted
 
   const totalIncome = filtered.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0)
   const totalExpenses = filtered.filter(t => t.type === 'expense').reduce((s, t) => s + Math.abs(t.amount), 0)
@@ -1492,19 +1530,22 @@ function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths,
 
       {/* Compact Filters Row */}
       <div className="flex flex-wrap items-center gap-3">
-        <input
-          type="text"
-          placeholder="Search..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="flex-1 min-w-[200px] bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 focus:outline-none focus:border-zinc-600 text-sm"
-        />
+        <div className="relative flex-1 min-w-[200px]">
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-500" />
+          <input
+            type="text"
+            placeholder="Search transactions..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full bg-zinc-800/50 border border-zinc-700 rounded-xl pl-12 pr-4 py-3 focus:outline-none focus:border-zinc-600"
+          />
+        </div>
         
         <div className="relative">
           <select
             value={filterType}
             onChange={(e) => setFilterType(e.target.value)}
-            className="bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 pr-10 focus:outline-none cursor-pointer text-sm appearance-none"
+            className="bg-zinc-800/50 border border-zinc-700 rounded-xl px-4 py-3 pr-10 focus:outline-none focus:border-zinc-600 cursor-pointer appearance-none min-w-[130px]"
           >
             <option value="all">All Types</option>
             <option value="income">Income</option>
@@ -1518,7 +1559,7 @@ function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths,
           <select
             value={filterCategory}
             onChange={(e) => setFilterCategory(e.target.value)}
-            className="bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 pr-10 focus:outline-none cursor-pointer text-sm appearance-none"
+            className="bg-zinc-800/50 border border-zinc-700 rounded-xl px-4 py-3 pr-10 focus:outline-none focus:border-zinc-600 cursor-pointer appearance-none min-w-[180px]"
           >
             <option value="all">All Categories</option>
             {categoryNames.map(cat => (
@@ -1769,10 +1810,71 @@ function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths,
                     className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-0 cursor-pointer"
                   />
                 </th>
-                <th className="text-left p-4 text-zinc-400 text-sm font-medium">Date</th>
-                <th className="text-left p-4 text-zinc-400 text-sm font-medium">Description</th>
-                <th className="text-left p-4 text-zinc-400 text-sm font-medium">Category / Type</th>
-                <th className="text-right p-4 text-zinc-400 text-sm font-medium">Amount</th>
+                <th 
+                  className="text-left p-4 text-zinc-400 text-sm font-medium cursor-pointer hover:text-white transition-colors"
+                  onClick={() => handleSort('date')}
+                >
+                  <div className="flex items-center gap-1">
+                    Date
+                    {sortField === 'date' ? (
+                      sortDirection === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />
+                    ) : (
+                      <ArrowUpDown className="w-3 h-3 opacity-30" />
+                    )}
+                  </div>
+                </th>
+                <th 
+                  className="text-left p-4 text-zinc-400 text-sm font-medium cursor-pointer hover:text-white transition-colors"
+                  onClick={() => handleSort('description')}
+                >
+                  <div className="flex items-center gap-1">
+                    Description
+                    {sortField === 'description' ? (
+                      sortDirection === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />
+                    ) : (
+                      <ArrowUpDown className="w-3 h-3 opacity-30" />
+                    )}
+                  </div>
+                </th>
+                <th 
+                  className="text-left p-4 text-zinc-400 text-sm font-medium cursor-pointer hover:text-white transition-colors"
+                  onClick={() => handleSort('category')}
+                >
+                  <div className="flex items-center gap-1">
+                    Category
+                    {sortField === 'category' ? (
+                      sortDirection === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />
+                    ) : (
+                      <ArrowUpDown className="w-3 h-3 opacity-30" />
+                    )}
+                  </div>
+                </th>
+                <th 
+                  className="text-left p-4 text-zinc-400 text-sm font-medium cursor-pointer hover:text-white transition-colors"
+                  onClick={() => handleSort('type')}
+                >
+                  <div className="flex items-center gap-1">
+                    Type
+                    {sortField === 'type' ? (
+                      sortDirection === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />
+                    ) : (
+                      <ArrowUpDown className="w-3 h-3 opacity-30" />
+                    )}
+                  </div>
+                </th>
+                <th 
+                  className="text-right p-4 text-zinc-400 text-sm font-medium cursor-pointer hover:text-white transition-colors"
+                  onClick={() => handleSort('amount')}
+                >
+                  <div className="flex items-center gap-1 justify-end">
+                    Amount
+                    {sortField === 'amount' ? (
+                      sortDirection === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />
+                    ) : (
+                      <ArrowUpDown className="w-3 h-3 opacity-30" />
+                    )}
+                  </div>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800">
@@ -1815,16 +1917,16 @@ function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths,
                       <p className="text-zinc-500 text-xs">{tx.bank} • {tx.account}</p>
                     </td>
                     <td className="p-4">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className={`px-2 py-1 rounded text-xs font-medium ${catClass}`}>{tx.category}</span>
-                        <span className={`px-2 py-0.5 rounded text-xs ${
-                          tx.type === 'income' ? 'bg-emerald-500/20 text-emerald-400' : 
-                          tx.type === 'expense' ? 'bg-red-500/20 text-red-400' : 
-                          'bg-blue-500/20 text-blue-400'
-                        }`}>
-                          {tx.type}
-                        </span>
-                      </div>
+                      <span className={`px-2 py-1 rounded text-xs font-medium ${catClass}`}>{tx.category}</span>
+                    </td>
+                    <td className="p-4">
+                      <span className={`px-2 py-1 rounded text-xs font-medium ${
+                        tx.type === 'income' ? 'bg-emerald-500/20 text-emerald-400' : 
+                        tx.type === 'expense' ? 'bg-red-500/20 text-red-400' : 
+                        'bg-blue-500/20 text-blue-400'
+                      }`}>
+                        {tx.type}
+                      </span>
                     </td>
                     <td className={`p-4 text-right font-semibold whitespace-nowrap ${tx.type === 'income' ? 'text-emerald-400' : tx.type === 'expense' ? 'text-red-400' : 'text-blue-400'}`}>
                       <div>{tx.amount > 0 ? '+' : ''}{formatCurrency(tx.amount)}</div>
@@ -2383,8 +2485,22 @@ function RulesTab({
   const [ruleDetailModal, setRuleDetailModal] = useState<CategorizationRule | null>(null)
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
   const [bulkProcessing, setBulkProcessing] = useState(false)
+  
+  // Sorting state for rules
+  const [ruleSortField, setRuleSortField] = useState<'keyword' | 'category' | 'matches'>('keyword')
+  const [ruleSortDirection, setRuleSortDirection] = useState<'asc' | 'desc'>('asc')
 
   const categoryNames = categories.map(c => c.name)
+
+  // Handle rule sort
+  const handleRuleSort = (field: 'keyword' | 'category' | 'matches') => {
+    if (ruleSortField === field) {
+      setRuleSortDirection(prev => prev === 'asc' ? 'desc' : 'asc')
+    } else {
+      setRuleSortField(field)
+      setRuleSortDirection(field === 'matches' ? 'desc' : 'asc')
+    }
+  }
 
   // Get category color
   const getCategoryColor = (categoryName: string) => {
@@ -2465,16 +2581,38 @@ function RulesTab({
     setBulkProcessing(false)
   }
 
-  // Filter rules by search and category
-  const filteredRules = rules.filter(r => {
-    const matchesSearch = r.keyword.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      r.category.toLowerCase().includes(searchTerm.toLowerCase())
-    const matchesCategory = categoryFilter === 'all' || r.category === categoryFilter
-    return matchesSearch && matchesCategory
-  })
+  // Filter and sort rules by search and category
+  const filteredRules = rules
+    .filter(r => {
+      const matchesSearch = r.keyword.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        r.category.toLowerCase().includes(searchTerm.toLowerCase())
+      const matchesCategory = categoryFilter === 'all' || r.category === categoryFilter
+      return matchesSearch && matchesCategory
+    })
+    .sort((a, b) => {
+      let comparison = 0
+      switch (ruleSortField) {
+        case 'keyword':
+          comparison = a.keyword.localeCompare(b.keyword)
+          break
+        case 'category':
+          comparison = a.category.localeCompare(b.category)
+          break
+        case 'matches':
+          comparison = getRuleMatchCount(a) - getRuleMatchCount(b)
+          break
+      }
+      return ruleSortDirection === 'asc' ? comparison : -comparison
+    })
 
   // All uncategorized transactions - group by description and sort by frequency
-  const otherTransactions = transactions.filter(tx => tx.category === 'Other')
+  // Include 'Other', 'Transfer' (old), and any category not in active categories
+  const activeCategoryNames = categories.map(c => c.name)
+  const otherTransactions = transactions.filter(tx => 
+    tx.category === 'Other' || 
+    tx.category === 'Transfer' || 
+    !activeCategoryNames.includes(tx.category)
+  )
   
   // Group by similar descriptions (normalize and count)
   const descriptionGroups = otherTransactions.reduce((acc, tx) => {
@@ -2910,10 +3048,40 @@ function RulesTab({
               )}
             </button>
           </div>
-          <div className="col-span-4">Keyword</div>
+          <div 
+            className="col-span-4 cursor-pointer hover:text-white transition-colors flex items-center gap-1"
+            onClick={() => handleRuleSort('keyword')}
+          >
+            Keyword
+            {ruleSortField === 'keyword' ? (
+              ruleSortDirection === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />
+            ) : (
+              <ArrowUpDown className="w-3 h-3 opacity-30" />
+            )}
+          </div>
           <div className="col-span-2">Match Type</div>
-          <div className="col-span-2">Category</div>
-          <div className="col-span-2 text-right">Matches</div>
+          <div 
+            className="col-span-2 cursor-pointer hover:text-white transition-colors flex items-center gap-1"
+            onClick={() => handleRuleSort('category')}
+          >
+            Category
+            {ruleSortField === 'category' ? (
+              ruleSortDirection === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />
+            ) : (
+              <ArrowUpDown className="w-3 h-3 opacity-30" />
+            )}
+          </div>
+          <div 
+            className="col-span-2 text-right cursor-pointer hover:text-white transition-colors flex items-center gap-1 justify-end"
+            onClick={() => handleRuleSort('matches')}
+          >
+            Matches
+            {ruleSortField === 'matches' ? (
+              ruleSortDirection === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />
+            ) : (
+              <ArrowUpDown className="w-3 h-3 opacity-30" />
+            )}
+          </div>
           <div className="col-span-1 text-right">Actions</div>
         </div>
 
@@ -3304,6 +3472,7 @@ export default function Dashboard() {
     { id: 'default-taxes', name: 'Taxes', color: 'red' },
     { id: 'default-operations', name: 'Operations', color: 'indigo' },
     { id: 'default-refunds', name: 'Refunds', color: 'emerald' },
+    { id: 'default-internal-transfer', name: 'Internal Transfer', color: 'teal' },
     { id: 'default-other', name: 'Other', color: 'zinc' },
   ]
 
@@ -4138,8 +4307,8 @@ const categoryRules: { pattern: RegExp; category: string }[] = [
   // Fees
   { pattern: /\bfee\b|charge|interest|penalty|overdraft|wire fee|monthly service/i, category: 'Fees' },
   // Transfers - Internal (only actual bank accounts)
-  { pattern: /^(business savings|business checking|savings account|checking account)$/i, category: 'Transfer' },
-  { pattern: /^(para main|de main|from main|to main)$/i, category: 'Transfer' },
+  { pattern: /^(business savings|business checking|savings account|checking account)$/i, category: 'Internal Transfer' },
+  { pattern: /^(para main|de main|from main|to main)$/i, category: 'Internal Transfer' },
   // Refunds
   { pattern: /refund|chargeback|dispute|reversal|return/i, category: 'Refunds' },
   // Office / Operations
@@ -4245,7 +4414,7 @@ function parseCSVLocally(csvContent: string, fileName: string, teamMembers: Team
         if (isFromOtherBank) {
           // Money coming from Revolut or between Relay accounts = internal
           type = 'internal'
-          category = 'Transfer'
+          category = 'Internal Transfer'
         } else {
           // Real income from external sources (Cartpanda, Shopify, etc)
           type = 'income'
@@ -4253,7 +4422,7 @@ function parseCSVLocally(csvContent: string, fileName: string, teamMembers: Team
         }
       } else if (txTypeLower.includes('transfer')) {
         type = 'internal'
-        category = 'Transfer'  // All transfers are internal
+        category = 'Internal Transfer'  // All transfers are internal
       } else {
         type = amount > 0 ? 'income' : 'expense'
         category = type === 'income' ? 'Sales' : detectCategory(rawDesc, payee)
@@ -4334,7 +4503,7 @@ function parseCSVLocally(csvContent: string, fileName: string, teamMembers: Team
         category = 'Refunds'
       } else if (revolut_type === 'EXCHANGE') {
         type = 'internal'
-        category = 'Transfer'
+        category = 'Internal Transfer'
       } else if (revolut_type === 'TRANSFER') {
         // TRANSFER logic:
         // - No beneficiary = internal (moving between Revolut accounts)
@@ -4345,11 +4514,11 @@ function parseCSVLocally(csvContent: string, fileName: string, teamMembers: Team
         if (!beneficiaryAccount) {
           // No beneficiary = internal transfer between Revolut accounts
           type = 'internal'
-          category = 'Transfer'
+          category = 'Internal Transfer'
         } else if (beneficiaryAccount === RELAY_ACCOUNT) {
           // Sending to own Relay account
           type = 'internal'
-          category = 'Transfer'
+          category = 'Internal Transfer'
         } else {
           // Has beneficiary - check if it's a team member
           const matchedMember = teamMembers.find(m => m.beneficiaryAccount === beneficiaryAccount)
