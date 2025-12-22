@@ -526,10 +526,22 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
   const totalIncome = Object.values(incomeBySource).reduce((a, b) => a + b, 0)
   const incomeSourceSorted = Object.entries(incomeBySource).sort((a, b) => b[1] - a[1])
 
-  // Top expenses (individual transactions)
-  const topExpenses = transactions
+  // Top vendors (grouped by payee/description)
+  const vendorTotals = transactions
     .filter(t => t.type === 'expense')
-    .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))
+    .reduce((acc, t) => {
+      // Use payee if available, otherwise use description
+      const vendor = t.payee || t.description || 'Unknown'
+      if (!acc[vendor]) {
+        acc[vendor] = { total: 0, count: 0, category: t.category }
+      }
+      acc[vendor].total += Math.abs(t.amount)
+      acc[vendor].count += 1
+      return acc
+    }, {} as Record<string, { total: number; count: number; category: string }>)
+
+  const topVendors = Object.entries(vendorTotals)
+    .sort((a, b) => b[1].total - a[1].total)
     .slice(0, 5)
 
   // Currency breakdown
@@ -670,12 +682,12 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
           </div>
         </div>
 
-        {/* Top Expenses */}
+        {/* Top Vendors */}
         <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl p-6">
-          <h3 className="font-semibold mb-5">Top Expenses</h3>
+          <h3 className="font-semibold mb-5">Top Vendors</h3>
           <div className="space-y-3">
-            {topExpenses.map((tx, idx) => (
-              <div key={tx.id} className="flex items-center gap-4 py-2 border-b border-zinc-800/50 last:border-0">
+            {topVendors.map(([vendor, data], idx) => (
+              <div key={vendor} className="flex items-center gap-4 py-2 border-b border-zinc-800/50 last:border-0">
                 <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold ${
                   idx === 0 ? 'bg-red-500/20 text-red-400' :
                   idx === 1 ? 'bg-orange-500/20 text-orange-400' :
@@ -685,20 +697,16 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
                   {idx + 1}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-medium truncate">{tx.description}</p>
-                  <p className="text-zinc-500 text-xs">{tx.category} • {tx.bank}</p>
+                  <p className="font-medium truncate">{vendor}</p>
+                  <p className="text-zinc-500 text-xs">{data.category}</p>
                 </div>
                 <div className="text-right">
-                  <p className="font-semibold text-red-400">{formatCurrency(Math.abs(tx.amount))}</p>
-                  {tx.originalCurrency && (
-                    <p className="text-zinc-500 text-xs">
-                      {currencyInfo[tx.originalCurrency]?.symbol || ''}{Math.abs(tx.originalAmount || 0).toLocaleString()}
-                    </p>
-                  )}
+                  <p className="font-semibold text-red-400">{formatCurrency(data.total)}</p>
+                  <p className="text-zinc-500 text-xs">{data.count} payment{data.count > 1 ? 's' : ''}</p>
                 </div>
               </div>
             ))}
-            {topExpenses.length === 0 && (
+            {topVendors.length === 0 && (
               <p className="text-zinc-500 text-sm text-center py-4">No expenses yet</p>
             )}
           </div>
