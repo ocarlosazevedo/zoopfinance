@@ -580,9 +580,9 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
     return result || name
   }
 
-  // Top vendors (grouped by normalized payee/description)
+  // Top vendors (grouped by normalized payee/description) - only real expenses
   const vendorTotals = transactions
-    .filter(t => t.type === 'expense')
+    .filter(t => t.type === 'expense' && t.category !== 'Sales') // Exclude mis-categorized sales
     .reduce((acc, t) => {
       // Use payee if available, otherwise use description
       const rawVendor = t.payee || t.description || 'Unknown'
@@ -599,39 +599,32 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
     .sort((a, b) => b[1].total - a[1].total)
     .slice(0, 5)
 
-  // Currency breakdown - separate income and expenses
+  // Currency breakdown - INCOME ONLY
   const currencyBreakdown = transactions
-    .filter(t => t.type !== 'internal') // Exclude internal transfers
+    .filter(t => t.type === 'income')
     .reduce((acc, t) => {
       const currency = t.originalCurrency || t.currency || 'USD'
       const originalAmount = t.originalAmount !== undefined ? Math.abs(t.originalAmount) : Math.abs(t.amount)
       const usdAmount = Math.abs(t.amount)
       
       if (!acc[currency]) {
-        acc[currency] = { income: 0, incomeOriginal: 0, expenses: 0, expensesOriginal: 0, count: 0 }
+        acc[currency] = { amount: 0, originalAmount: 0, count: 0 }
       }
       
-      if (t.type === 'income') {
-        acc[currency].income += usdAmount
-        acc[currency].incomeOriginal += originalAmount
-      } else if (t.type === 'expense') {
-        acc[currency].expenses += usdAmount
-        acc[currency].expensesOriginal += originalAmount
-      }
+      acc[currency].amount += usdAmount
+      acc[currency].originalAmount += originalAmount
       acc[currency].count += 1
       return acc
-    }, {} as Record<string, { income: number; incomeOriginal: number; expenses: number; expensesOriginal: number; count: number }>)
+    }, {} as Record<string, { amount: number; originalAmount: number; count: number }>)
 
   const currencySorted = Object.entries(currencyBreakdown)
     .map(([currency, data]) => ({
       currency,
-      ...data,
-      net: data.income - data.expenses,
-      total: data.income + data.expenses
+      ...data
     }))
-    .sort((a, b) => b.total - a.total)
+    .sort((a, b) => b.amount - a.amount)
   
-  const totalVolume = currencySorted.reduce((a, b) => a + b.total, 0)
+  const totalIncomeByCurrency = currencySorted.reduce((a, b) => a + b.amount, 0)
 
   // Currency flags/symbols
   const currencyInfo: Record<string, { flag: string; symbol: string }> = {
@@ -783,49 +776,54 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
           </div>
         </div>
 
-        {/* Currency Breakdown */}
+        {/* Income by Currency */}
         <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl p-6">
-          <h3 className="font-semibold mb-5">Currency Breakdown</h3>
+          <div className="flex items-center justify-between mb-5">
+            <h3 className="font-semibold">Income by Currency</h3>
+            <span className="text-zinc-500 text-sm">{formatCurrency(totalIncomeByCurrency)}</span>
+          </div>
           <div className="space-y-4">
             {currencySorted.map((data) => {
               const info = currencyInfo[data.currency] || { flag: '💱', symbol: data.currency }
+              const percentage = totalIncomeByCurrency > 0 ? (data.amount / totalIncomeByCurrency) * 100 : 0
               return (
                 <div key={data.currency} className="space-y-2">
                   <div className="flex items-center gap-3">
                     <div className="w-8 h-8 rounded-lg bg-zinc-700/50 flex items-center justify-center text-lg">
                       {info.flag}
                     </div>
-                    <span className="font-medium flex-1">{data.currency}</span>
-                    <span className={`font-semibold ${data.net >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                      {data.net >= 0 ? '+' : ''}{formatCurrency(data.net)}
-                    </span>
-                  </div>
-                  <div className="ml-11 flex items-center gap-4 text-sm">
-                    <div className="flex items-center gap-2">
-                      <span className="text-zinc-500">In:</span>
-                      <span className="text-emerald-400">{formatCurrency(data.income)}</span>
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-medium">{data.currency}</span>
+                        <span className="text-zinc-500 text-sm">{percentage.toFixed(0)}%</span>
+                      </div>
+                      <div className="h-1.5 bg-zinc-700/50 rounded-full overflow-hidden">
+                        <div 
+                          className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full transition-all duration-500"
+                          style={{ width: `${percentage}%` }}
+                        />
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-zinc-500">Out:</span>
-                      <span className="text-red-400">{formatCurrency(data.expenses)}</span>
+                    <div className="text-right w-24">
+                      <p className="font-semibold text-emerald-400">{formatCurrency(data.amount)}</p>
+                      {data.currency !== 'USD' && (
+                        <p className="text-zinc-500 text-xs">
+                          {info.symbol}{data.originalAmount.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </p>
+                      )}
                     </div>
-                    {data.currency !== 'USD' && (
-                      <span className="text-zinc-600 text-xs">
-                        ({info.symbol}{data.incomeOriginal.toLocaleString(undefined, { maximumFractionDigits: 0 })} / {info.symbol}{data.expensesOriginal.toLocaleString(undefined, { maximumFractionDigits: 0 })})
-                      </span>
-                    )}
                   </div>
                 </div>
               )
             })}
             {currencySorted.length === 0 && (
-              <p className="text-zinc-500 text-sm text-center py-4">No transaction data</p>
+              <p className="text-zinc-500 text-sm text-center py-4">No income data</p>
             )}
           </div>
           {currencySorted.length > 0 && (
             <div className="mt-4 pt-4 border-t border-zinc-700/50 flex items-center justify-between">
               <span className="text-zinc-500 text-sm">{currencySorted.length} currencies</span>
-              <span className="text-zinc-500 text-sm">{transactions.filter(t => t.type !== 'internal').length} transactions</span>
+              <span className="text-zinc-500 text-sm">{currencySorted.reduce((a, b) => a + b.count, 0)} transactions</span>
             </div>
           )}
         </div>
