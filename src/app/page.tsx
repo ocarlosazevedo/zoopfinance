@@ -12,6 +12,7 @@ type TeamMember = {
   name: string
   role: string
   baseSalary: number
+  beneficiaryAccount?: string // Account number for auto-matching payments
   compensation: Record<string, { variable: number; note: string }>
 }
 
@@ -647,6 +648,7 @@ export default function Dashboard() {
             name: m.name,
             role: m.role,
             baseSalary: parseFloat(m.base_salary),
+            beneficiaryAccount: m.beneficiary_account || undefined,
             compensation
           }
         }))
@@ -795,15 +797,32 @@ export default function Dashboard() {
     setTeamMembers(prev => prev.map(m => m.id !== id ? m : { ...m, compensation: { ...m.compensation, [month]: { variable, note } } }))
   }
 
-  const handleAddMember = (name: string, role: string, baseSalary: number) => {
+  const handleAddMember = async (name: string, role: string, baseSalary: number, beneficiaryAccount?: string) => {
     const newMember: TeamMember = {
       id: crypto.randomUUID(),
       name,
       role,
       baseSalary,
+      beneficiaryAccount,
       compensation: {}
     }
-    setTeamMembers(prev => [...prev, newMember])
+    
+    // Save to Supabase
+    const { error } = await supabase
+      .from('team_members')
+      .insert({
+        id: newMember.id,
+        name,
+        role,
+        base_salary: baseSalary,
+        beneficiary_account: beneficiaryAccount || null
+      } as any)
+    
+    if (error) {
+      console.error('Error saving team member:', error)
+    } else {
+      setTeamMembers(prev => [...prev, newMember])
+    }
     setShowAddMemberModal(false)
   }
 
@@ -873,6 +892,7 @@ export default function Dashboard() {
       {showUploadModal && (
         <UploadModal 
           onClose={() => setShowUploadModal(false)} 
+          teamMembers={teamMembers}
           onUploadComplete={async (txs, period, files) => { 
             // Add period to each transaction
             const txsWithPeriod = txs.map(tx => ({ ...tx, period }))
@@ -971,7 +991,10 @@ function cleanDescription(desc: string, payee?: string): string {
   return cleaned.substring(0, 80) || 'Transaction'
 }
 
-function parseCSVLocally(csvContent: string, fileName: string): Transaction[] {
+// Conta do Relay para marcar como internal automaticamente
+const RELAY_ACCOUNT = '200000805781'
+
+function parseCSVLocally(csvContent: string, fileName: string, teamMembers: TeamMember[] = []): Transaction[] {
   const lines = csvContent.split('\n').filter(line => line.trim())
   if (lines.length < 2) return []
   
@@ -1014,21 +1037,23 @@ function parseCSVLocally(csvContent: string, fileName: string): Transaction[] {
       // Description: use payee if description is "Unknown"
       const description = cleanDescription(rawDesc, payee)
       
-      // Category based on payee
-      const category = detectCategory(rawDesc, payee)
-      
-      // Type based on Transaction Type column
+      // Type and Category based on Transaction Type column
       let type: 'income' | 'expense' | 'internal'
+      let category: string
       const txTypeLower = txType.toLowerCase()
       
       if (txTypeLower === 'spend') {
         type = 'expense'
+        category = detectCategory(rawDesc, payee)  // Category by Payee (Facebook→Ads, etc)
       } else if (txTypeLower === 'receive') {
         type = 'income'
+        category = 'Sales'  // All income is Sales
       } else if (txTypeLower.includes('transfer')) {
         type = 'internal'
+        category = 'Transfer'  // All transfers are internal
       } else {
         type = amount > 0 ? 'income' : 'expense'
+        category = type === 'income' ? 'Sales' : detectCategory(rawDesc, payee)
       }
       
       const date = parseDate(values[dateIdx] || '')
@@ -1048,12 +1073,13 @@ function parseCSVLocally(csvContent: string, fileName: string): Transaction[] {
       })
     }
   } else if (isRevolut) {
-    // Revolut format: Date started,Date completed,ID,Type,State,Description,Reference,...,Amount,...
+    // Revolut format: Date started,Date completed,ID,Type,State,Description,Reference,...,Amount,...,Beneficiary account number,...
     const dateIdx = headers.findIndex(h => h.includes('date completed') || h.includes('date started'))
     const typeIdx = headers.indexOf('type')
     const descIdx = headers.indexOf('description')
     const amountIdx = headers.indexOf('amount')
     const currencyIdx = headers.indexOf('payment currency') !== -1 ? headers.indexOf('payment currency') : headers.indexOf('currency')
+    const beneficiaryIdx = headers.indexOf('beneficiary account number')
     
     for (let i = 1; i < lines.length; i++) {
       const values = parseCSVLine(lines[i])
@@ -1065,19 +1091,52 @@ function parseCSVLocally(csvContent: string, fileName: string): Transaction[] {
       
       const revolut_type = (values[typeIdx] || '').toUpperCase()
       const rawDesc = values[descIdx] || ''
+      const beneficiaryAccount = beneficiaryIdx >= 0 ? values[beneficiaryIdx]?.trim() : ''
       
       const description = cleanDescription(rawDesc, '')
-      const category = detectCategory(rawDesc, '')
+      let category = detectCategory(rawDesc, '')
       
       // Type based on Revolut transaction type
       let type: 'income' | 'expense' | 'internal'
       
       if (revolut_type === 'CARD_PAYMENT' || revolut_type === 'FEE') {
         type = 'expense'
-      } else if (revolut_type === 'TOPUP' || revolut_type === 'REFUND' || revolut_type === 'CARD_REFUND') {
+        if (revolut_type === 'FEE') category = 'Fees'
+      } else if (revolut_type === 'TOPUP') {
         type = 'income'
-      } else if (revolut_type === 'TRANSFER' || revolut_type === 'EXCHANGE') {
+        category = 'Sales'  // TOPUPs são faturamento real
+      } else if (revolut_type === 'REFUND' || revolut_type === 'CARD_REFUND') {
+        type = 'income'
+        category = 'Refunds'
+      } else if (revolut_type === 'EXCHANGE') {
         type = 'internal'
+        category = 'Transfer'
+      } else if (revolut_type === 'TRANSFER') {
+        // TRANSFER logic:
+        // - No beneficiary = internal (moving between Revolut accounts)
+        // - Beneficiary = RELAY_ACCOUNT = internal (sending to own Relay)
+        // - Beneficiary in teamMembers = expense/Payroll
+        // - Other beneficiary = expense/Other
+        
+        if (!beneficiaryAccount) {
+          // No beneficiary = internal transfer between Revolut accounts
+          type = 'internal'
+          category = 'Transfer'
+        } else if (beneficiaryAccount === RELAY_ACCOUNT) {
+          // Sending to own Relay account
+          type = 'internal'
+          category = 'Transfer'
+        } else {
+          // Has beneficiary - check if it's a team member
+          const matchedMember = teamMembers.find(m => m.beneficiaryAccount === beneficiaryAccount)
+          if (matchedMember) {
+            type = 'expense'
+            category = 'Payroll'
+          } else {
+            type = 'expense'
+            category = 'Other'
+          }
+        }
       } else {
         type = amount > 0 ? 'income' : 'expense'
       }
@@ -1196,7 +1255,7 @@ function parseDate(dateStr: string): string {
 // ============================================
 // UPLOAD MODAL - INSTANTÂNEO
 // ============================================
-function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUploadComplete: (transactions: Transaction[], period: string, files: File[]) => void }) {
+function UploadModal({ onClose, onUploadComplete, teamMembers }: { onClose: () => void; onUploadComplete: (transactions: Transaction[], period: string, files: File[]) => void; teamMembers: TeamMember[] }) {
   const [isDragging, setIsDragging] = useState(false)
   const [files, setFiles] = useState<File[]>([])
   const [processing, setProcessing] = useState(false)
@@ -1261,7 +1320,7 @@ function UploadModal({ onClose, onUploadComplete }: { onClose: () => void; onUpl
       // Process all files locally - INSTANT
       for (const file of files) {
         const csvContent = await file.text()
-        const transactions = parseCSVLocally(csvContent, file.name)
+        const transactions = parseCSVLocally(csvContent, file.name, teamMembers)
         
         // Add period to each transaction
         transactions.forEach(tx => {
@@ -1648,14 +1707,15 @@ function ManageDataModal({
   )
 }
 
-function AddMemberModal({ onSave, onClose }: { onSave: (name: string, role: string, baseSalary: number) => void; onClose: () => void }) {
+function AddMemberModal({ onSave, onClose }: { onSave: (name: string, role: string, baseSalary: number, beneficiaryAccount?: string) => void; onClose: () => void }) {
   const [name, setName] = useState('')
   const [role, setRole] = useState('')
   const [baseSalary, setBaseSalary] = useState('')
+  const [beneficiaryAccount, setBeneficiaryAccount] = useState('')
 
   const handleSave = () => {
     if (!name || !role || !baseSalary) return
-    onSave(name, role, parseFloat(baseSalary))
+    onSave(name, role, parseFloat(baseSalary), beneficiaryAccount || undefined)
   }
 
   return (
@@ -1680,6 +1740,11 @@ function AddMemberModal({ onSave, onClose }: { onSave: (name: string, role: stri
               <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500">$</span>
               <input type="number" value={baseSalary} onChange={(e) => setBaseSalary(e.target.value)} placeholder="0" className="w-full bg-zinc-800 border border-zinc-700 rounded-xl pl-9 pr-4 py-3 focus:outline-none focus:border-emerald-500" />
             </div>
+          </div>
+          <div>
+            <label className="block text-zinc-400 text-sm mb-2">Beneficiary Account <span className="text-zinc-600">(optional)</span></label>
+            <input type="text" value={beneficiaryAccount} onChange={(e) => setBeneficiaryAccount(e.target.value)} placeholder="For auto-matching payments" className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 focus:outline-none focus:border-emerald-500" />
+            <p className="text-zinc-600 text-xs mt-1">Account number from Revolut transfers</p>
           </div>
         </div>
         <div className="p-5 border-t border-zinc-800 flex gap-3">
