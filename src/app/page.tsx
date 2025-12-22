@@ -501,13 +501,84 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
       return acc
     }, {} as Record<string, number>)
 
-  const incomeByBank = transactions
+  const totalExpenses = Object.values(expensesByCategory).reduce((a, b) => a + b, 0)
+  const expensesCategorySorted = Object.entries(expensesByCategory).sort((a, b) => b[1] - a[1])
+
+  // Income by source (using description/payee patterns)
+  const incomeBySource = transactions
     .filter(t => t.type === 'income')
     .reduce((acc, t) => {
-      const bank = t.bank || 'Other'
-      acc[bank] = (acc[bank] || 0) + t.amount
+      // Try to identify source from description
+      let source = 'Other'
+      const desc = t.description.toLowerCase()
+      if (desc.includes('cartpanda')) source = 'Cartpanda'
+      else if (desc.includes('shopify')) source = 'Shopify'
+      else if (desc.includes('stripe')) source = 'Stripe'
+      else if (desc.includes('paypal')) source = 'PayPal'
+      else if (t.category === 'Refunds') source = 'Refunds'
+      else if (t.payee) source = t.payee
+      else source = t.bank
+      
+      acc[source] = (acc[source] || 0) + t.amount
       return acc
     }, {} as Record<string, number>)
+
+  const totalIncome = Object.values(incomeBySource).reduce((a, b) => a + b, 0)
+  const incomeSourceSorted = Object.entries(incomeBySource).sort((a, b) => b[1] - a[1])
+
+  // Top expenses (individual transactions)
+  const topExpenses = transactions
+    .filter(t => t.type === 'expense')
+    .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))
+    .slice(0, 5)
+
+  // Currency breakdown
+  const currencyBreakdown = transactions.reduce((acc, t) => {
+    const currency = t.originalCurrency || t.currency || 'USD'
+    const amount = t.originalAmount !== undefined ? Math.abs(t.originalAmount) : Math.abs(t.amount)
+    const usdAmount = Math.abs(t.amount)
+    
+    if (!acc[currency]) {
+      acc[currency] = { original: 0, usd: 0, count: 0 }
+    }
+    acc[currency].original += amount
+    acc[currency].usd += usdAmount
+    acc[currency].count += 1
+    return acc
+  }, {} as Record<string, { original: number; usd: number; count: number }>)
+
+  const currencySorted = Object.entries(currencyBreakdown).sort((a, b) => b[1].usd - a[1].usd)
+  const totalUSD = currencySorted.reduce((a, b) => a + b[1].usd, 0)
+
+  // Currency flags/symbols
+  const currencyInfo: Record<string, { flag: string; symbol: string }> = {
+    USD: { flag: '🇺🇸', symbol: '$' },
+    EUR: { flag: '🇪🇺', symbol: '€' },
+    GBP: { flag: '🇬🇧', symbol: '£' },
+    BRL: { flag: '🇧🇷', symbol: 'R$' },
+    CAD: { flag: '🇨🇦', symbol: 'C$' },
+    AUD: { flag: '🇦🇺', symbol: 'A$' },
+    JPY: { flag: '🇯🇵', symbol: '¥' },
+    CNY: { flag: '🇨🇳', symbol: '¥' },
+    MXN: { flag: '🇲🇽', symbol: '$' },
+  }
+
+  // Category colors
+  const categoryColors: Record<string, string> = {
+    Ads: 'from-purple-500 to-purple-600',
+    Payroll: 'from-blue-500 to-blue-600',
+    Software: 'from-cyan-500 to-cyan-600',
+    Fees: 'from-amber-500 to-amber-600',
+    Shipping: 'from-orange-500 to-orange-600',
+    Products: 'from-pink-500 to-pink-600',
+    Taxes: 'from-red-500 to-red-600',
+    Other: 'from-zinc-500 to-zinc-600',
+    Transfer: 'from-indigo-500 to-indigo-600',
+    Refunds: 'from-emerald-500 to-emerald-600',
+    Sales: 'from-emerald-500 to-emerald-600',
+  }
+
+  const getCategoryColor = (cat: string) => categoryColors[cat] || categoryColors.Other
 
   return (
     <div className="space-y-6">
@@ -530,75 +601,154 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
         </div>
       </div>
 
-      {/* Breakdown Cards */}
+      {/* Analytics Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Income by Bank */}
-        <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl p-6">
-          <h3 className="font-semibold mb-4">Income by Source</h3>
-          <div className="space-y-3">
-            {Object.entries(incomeByBank)
-              .sort((a, b) => b[1] - a[1])
-              .slice(0, 5)
-              .map(([bank, amount]) => (
-                <div key={bank} className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-2 h-2 rounded-full bg-emerald-500" />
-                    <span className="text-zinc-300">{bank}</span>
-                  </div>
-                  <span className="font-semibold text-emerald-400">{formatCurrency(amount)}</span>
-                </div>
-              ))}
-            {Object.keys(incomeByBank).length === 0 && (
-              <p className="text-zinc-500 text-sm">No income data</p>
-            )}
-          </div>
-        </div>
-
+        
         {/* Expenses by Category */}
         <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl p-6">
-          <h3 className="font-semibold mb-4">Expenses by Category</h3>
-          <div className="space-y-3">
-            {Object.entries(expensesByCategory)
-              .sort((a, b) => b[1] - a[1])
-              .slice(0, 5)
-              .map(([category, amount]) => (
-                <div key={category} className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-2 h-2 rounded-full bg-red-500" />
+          <div className="flex items-center justify-between mb-5">
+            <h3 className="font-semibold">Expenses by Category</h3>
+            <span className="text-zinc-500 text-sm">{formatCurrency(totalExpenses)}</span>
+          </div>
+          <div className="space-y-4">
+            {expensesCategorySorted.slice(0, 6).map(([category, amount]) => {
+              const percentage = totalExpenses > 0 ? (amount / totalExpenses) * 100 : 0
+              return (
+                <div key={category} className="space-y-2">
+                  <div className="flex items-center justify-between text-sm">
                     <span className="text-zinc-300">{category}</span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-zinc-500">{percentage.toFixed(0)}%</span>
+                      <span className="font-medium w-24 text-right">{formatCurrency(amount)}</span>
+                    </div>
                   </div>
-                  <span className="font-semibold text-red-400">{formatCurrency(amount)}</span>
+                  <div className="h-2 bg-zinc-700/50 rounded-full overflow-hidden">
+                    <div 
+                      className={`h-full bg-gradient-to-r ${getCategoryColor(category)} rounded-full transition-all duration-500`}
+                      style={{ width: `${percentage}%` }}
+                    />
+                  </div>
                 </div>
-              ))}
-            {Object.keys(expensesByCategory).length === 0 && (
-              <p className="text-zinc-500 text-sm">No expense data</p>
+              )
+            })}
+            {expensesCategorySorted.length === 0 && (
+              <p className="text-zinc-500 text-sm text-center py-4">No expense data</p>
             )}
           </div>
         </div>
-      </div>
 
-      {/* Recent Transactions */}
-      <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl p-6">
-        <h3 className="font-semibold mb-4">Recent Transactions</h3>
-        <div className="space-y-2">
-          {transactions.slice(0, 5).map((tx) => (
-            <div key={tx.id} className="flex items-center justify-between py-2 border-b border-zinc-800 last:border-0">
-              <div>
-                <p className="font-medium">{tx.description}</p>
-                <p className="text-zinc-500 text-xs">{tx.bank} • {tx.date}</p>
+        {/* Income Sources */}
+        <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl p-6">
+          <div className="flex items-center justify-between mb-5">
+            <h3 className="font-semibold">Income Sources</h3>
+            <span className="text-zinc-500 text-sm">{formatCurrency(totalIncome)}</span>
+          </div>
+          <div className="space-y-4">
+            {incomeSourceSorted.slice(0, 6).map(([source, amount]) => {
+              const percentage = totalIncome > 0 ? (amount / totalIncome) * 100 : 0
+              return (
+                <div key={source} className="space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-zinc-300">{source}</span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-zinc-500">{percentage.toFixed(0)}%</span>
+                      <span className="font-medium text-emerald-400 w-24 text-right">{formatCurrency(amount)}</span>
+                    </div>
+                  </div>
+                  <div className="h-2 bg-zinc-700/50 rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full transition-all duration-500"
+                      style={{ width: `${percentage}%` }}
+                    />
+                  </div>
+                </div>
+              )
+            })}
+            {incomeSourceSorted.length === 0 && (
+              <p className="text-zinc-500 text-sm text-center py-4">No income data</p>
+            )}
+          </div>
+        </div>
+
+        {/* Top Expenses */}
+        <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl p-6">
+          <h3 className="font-semibold mb-5">Top Expenses</h3>
+          <div className="space-y-3">
+            {topExpenses.map((tx, idx) => (
+              <div key={tx.id} className="flex items-center gap-4 py-2 border-b border-zinc-800/50 last:border-0">
+                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold ${
+                  idx === 0 ? 'bg-red-500/20 text-red-400' :
+                  idx === 1 ? 'bg-orange-500/20 text-orange-400' :
+                  idx === 2 ? 'bg-amber-500/20 text-amber-400' :
+                  'bg-zinc-700/50 text-zinc-400'
+                }`}>
+                  {idx + 1}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium truncate">{tx.description}</p>
+                  <p className="text-zinc-500 text-xs">{tx.category} • {tx.bank}</p>
+                </div>
+                <div className="text-right">
+                  <p className="font-semibold text-red-400">{formatCurrency(Math.abs(tx.amount))}</p>
+                  {tx.originalCurrency && (
+                    <p className="text-zinc-500 text-xs">
+                      {currencyInfo[tx.originalCurrency]?.symbol || ''}{Math.abs(tx.originalAmount || 0).toLocaleString()}
+                    </p>
+                  )}
+                </div>
               </div>
-              <div className="text-right">
-                <span className={`font-semibold ${tx.type === 'income' ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {tx.type === 'income' ? '+' : '-'}{formatCurrency(Math.abs(tx.amount))}
-                </span>
-                {tx.originalCurrency && (
-                  <p className="text-zinc-500 text-xs">
-                    {tx.originalAmount && tx.originalAmount < 0 ? '' : ''}{new Intl.NumberFormat('en-US', { style: 'currency', currency: tx.originalCurrency, minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(Math.abs(tx.originalAmount || 0))}
-                  </p>
-                )}
-              </div>
+            ))}
+            {topExpenses.length === 0 && (
+              <p className="text-zinc-500 text-sm text-center py-4">No expenses yet</p>
+            )}
+          </div>
+        </div>
+
+        {/* Currency Breakdown */}
+        <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl p-6">
+          <h3 className="font-semibold mb-5">Currency Breakdown</h3>
+          <div className="space-y-4">
+            {currencySorted.map(([currency, data]) => {
+              const percentage = totalUSD > 0 ? (data.usd / totalUSD) * 100 : 0
+              const info = currencyInfo[currency] || { flag: '💱', symbol: currency }
+              return (
+                <div key={currency} className="flex items-center gap-4">
+                  <div className="w-10 h-10 rounded-xl bg-zinc-700/50 flex items-center justify-center text-xl">
+                    {info.flag}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-medium">{currency}</span>
+                      <span className="text-zinc-400 text-sm">{percentage.toFixed(0)}%</span>
+                    </div>
+                    <div className="h-1.5 bg-zinc-700/50 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 rounded-full transition-all duration-500"
+                        style={{ width: `${percentage}%` }}
+                      />
+                    </div>
+                  </div>
+                  <div className="text-right w-28">
+                    <p className="font-semibold">{formatCurrency(data.usd)}</p>
+                    {currency !== 'USD' && (
+                      <p className="text-zinc-500 text-xs">
+                        {info.symbol}{data.original.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+            {currencySorted.length === 0 && (
+              <p className="text-zinc-500 text-sm text-center py-4">No transaction data</p>
+            )}
+          </div>
+          {currencySorted.length > 0 && (
+            <div className="mt-4 pt-4 border-t border-zinc-700/50 flex items-center justify-between">
+              <span className="text-zinc-500 text-sm">{currencySorted.length} currencies</span>
+              <span className="text-zinc-500 text-sm">{transactions.length} transactions</span>
             </div>
-          ))}
+          )}
         </div>
       </div>
     </div>
