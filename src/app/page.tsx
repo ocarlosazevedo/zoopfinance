@@ -4361,6 +4361,9 @@ function cleanDescription(desc: string, payee?: string): string {
 // Conta do Relay para marcar como internal automaticamente
 const RELAY_ACCOUNT = '200000805781'
 
+// Nome da empresa para detectar transferências internas
+const COMPANY_NAMES = ['horizon blue', 'horizon blue solutions']
+
 function parseCSVLocally(csvContent: string, fileName: string, teamMembers: TeamMember[] = [], exchangeRates: Record<string, number> = {}): Transaction[] {
   const lines = csvContent.split('\n').filter(line => line.trim())
   if (lines.length < 2) return []
@@ -4419,7 +4422,16 @@ function parseCSVLocally(csvContent: string, fileName: string, teamMembers: Team
       // Check if payee indicates transfer from another bank (Revolut → Relay)
       const isFromOtherBank = /^(revolut|relay)$/i.test(payee)
       
-      if (txTypeLower === 'spend') {
+      // Check if payee/description is the company itself (internal transfer)
+      const payeeLower = payee.toLowerCase()
+      const descLower = rawDesc.toLowerCase()
+      const isOwnCompany = COMPANY_NAMES.some(name => payeeLower.includes(name) || descLower.includes(name))
+      
+      if (isOwnCompany) {
+        // Transfers to/from own company are always internal
+        type = 'internal'
+        category = 'Internal Transfer'
+      } else if (txTypeLower === 'spend') {
         type = 'expense'
         category = detectCategory(rawDesc, payee)  // Category by Payee (Facebook→Ads, etc)
       } else if (txTypeLower === 'receive') {
@@ -4501,10 +4513,21 @@ function parseCSVLocally(csvContent: string, fileName: string, teamMembers: Team
       const description = cleanDescription(rawDesc, '')
       let category = detectCategory(rawDesc, '')
       
+      // Check if description/beneficiary is the company itself (internal transfer)
+      const descLower = rawDesc.toLowerCase()
+      const beneficiaryNameLower = beneficiaryName.toLowerCase()
+      const isOwnCompany = COMPANY_NAMES.some(name => 
+        descLower.includes(name) || beneficiaryNameLower.includes(name)
+      )
+      
       // Type based on Revolut transaction type
       let type: 'income' | 'expense' | 'internal'
       
-      if (revolut_type === 'CARD_PAYMENT' || revolut_type === 'FEE') {
+      if (isOwnCompany) {
+        // Transfers to/from own company are always internal
+        type = 'internal'
+        category = 'Internal Transfer'
+      } else if (revolut_type === 'CARD_PAYMENT' || revolut_type === 'FEE') {
         type = 'expense'
         if (revolut_type === 'FEE') category = 'Fees'
       } else if (revolut_type === 'TOPUP') {
