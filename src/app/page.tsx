@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Upload, Calendar, LayoutDashboard, Receipt, Users, ChevronDown, ChevronLeft, ChevronRight, Plus, Pencil, X, FileUp, UserPlus } from 'lucide-react'
+import { Upload, Calendar, LayoutDashboard, Receipt, Users, ChevronDown, ChevronLeft, ChevronRight, Plus, Pencil, X, FileUp, UserPlus, DollarSign, PoundSterling, Euro, Building2, CreditCard, Landmark, Loader2, Banknote, Check } from 'lucide-react'
 import { createClient } from '@/lib/supabase'
 
 // ============================================
@@ -648,17 +648,27 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
   
   const totalIncomeByCurrency = currencySorted.reduce((a, b) => a + b.amount, 0)
 
-  // Currency flags/symbols
-  const currencyInfo: Record<string, { flag: string; symbol: string }> = {
-    USD: { flag: '🇺🇸', symbol: '$' },
-    EUR: { flag: '🇪🇺', symbol: '€' },
-    GBP: { flag: '🇬🇧', symbol: '£' },
-    BRL: { flag: '🇧🇷', symbol: 'R$' },
-    CAD: { flag: '🇨🇦', symbol: 'C$' },
-    AUD: { flag: '🇦🇺', symbol: 'A$' },
-    JPY: { flag: '🇯🇵', symbol: '¥' },
-    CNY: { flag: '🇨🇳', symbol: '¥' },
-    MXN: { flag: '🇲🇽', symbol: '$' },
+  // Currency info - using symbols only (no emojis)
+  const currencyInfo: Record<string, { symbol: string; color: string }> = {
+    USD: { symbol: '$', color: 'text-emerald-400' },
+    EUR: { symbol: '€', color: 'text-blue-400' },
+    GBP: { symbol: '£', color: 'text-purple-400' },
+    BRL: { symbol: 'R$', color: 'text-yellow-400' },
+    CAD: { symbol: 'C$', color: 'text-red-400' },
+    AUD: { symbol: 'A$', color: 'text-orange-400' },
+    JPY: { symbol: '¥', color: 'text-pink-400' },
+    CNY: { symbol: '¥', color: 'text-rose-400' },
+    MXN: { symbol: '$', color: 'text-green-400' },
+  }
+
+  // Bank icons component
+  const BankIcon = ({ bank, className = "w-5 h-5" }: { bank: string; className?: string }) => {
+    switch (bank) {
+      case 'Relay': return <Building2 className={className} />
+      case 'Revolut': return <CreditCard className={className} />
+      case 'Mercury': return <Landmark className={className} />
+      default: return <Banknote className={className} />
+    }
   }
 
   // Category colors
@@ -695,17 +705,36 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
             </div>
             <div className="p-5 overflow-y-auto max-h-[60vh]">
               <div className="space-y-2">
-                {detailPopup.transactions.map((tx, i) => (
-                  <div key={i} className="flex items-center justify-between p-3 bg-zinc-800/50 rounded-lg hover:bg-zinc-800 transition-colors">
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium truncate">{tx.description}</p>
-                      <p className="text-zinc-500 text-sm">{tx.date} • {tx.bank}</p>
+                {detailPopup.transactions.map((tx, i) => {
+                  const originalCurrency = tx.originalCurrency || tx.currency || 'USD'
+                  const originalAmount = tx.originalAmount !== undefined ? tx.originalAmount : tx.amount
+                  const currInfo = currencyInfo[originalCurrency] || { symbol: originalCurrency, color: 'text-zinc-400' }
+                  const hasConversion = tx.originalCurrency && tx.originalCurrency !== 'USD'
+                  
+                  return (
+                    <div key={i} className="flex items-center justify-between p-3 bg-zinc-800/50 rounded-lg hover:bg-zinc-800 transition-colors">
+                      <div className="flex items-center gap-3 flex-1 min-w-0">
+                        <div className="w-8 h-8 rounded-lg bg-zinc-700/50 flex items-center justify-center text-zinc-400">
+                          <BankIcon bank={tx.bank} className="w-4 h-4" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium truncate">{tx.description}</p>
+                          <p className="text-zinc-500 text-sm">{tx.date} • {tx.bank}</p>
+                        </div>
+                      </div>
+                      <div className="text-right ml-4">
+                        <span className={`font-semibold ${tx.type === 'income' ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {tx.type === 'income' ? '+' : '-'}{currInfo.symbol}{Math.abs(originalAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                        {hasConversion && (
+                          <p className="text-zinc-500 text-xs">
+                            ≈ {formatCurrency(Math.abs(tx.amount))}
+                          </p>
+                        )}
+                      </div>
                     </div>
-                    <span className={`font-semibold ml-4 ${tx.type === 'income' ? 'text-emerald-400' : 'text-red-400'}`}>
-                      {tx.type === 'income' ? '+' : '-'}{formatCurrency(Math.abs(tx.amount))}
-                    </span>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
           </div>
@@ -848,13 +877,13 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
           </div>
           <div className="space-y-4">
             {currencySorted.map((data) => {
-              const info = currencyInfo[data.currency] || { flag: '💱', symbol: data.currency }
+              const info = currencyInfo[data.currency] || { symbol: data.currency, color: 'text-zinc-400' }
               const percentage = totalIncomeByCurrency > 0 ? (data.amount / totalIncomeByCurrency) * 100 : 0
               return (
                 <div key={data.currency} className="space-y-2">
                   <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-zinc-700/50 flex items-center justify-center text-lg">
-                      {info.flag}
+                    <div className={`w-8 h-8 rounded-lg bg-zinc-700/50 flex items-center justify-center text-sm font-bold ${info.color}`}>
+                      {info.symbol}
                     </div>
                     <div className="flex-1">
                       <div className="flex items-center justify-between mb-1">
@@ -901,7 +930,6 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
           <div className="space-y-4">
             {incomeBankSorted.map(([bank, data]) => {
               const percentage = totalIncomeByBank > 0 ? (data.total / totalIncomeByBank) * 100 : 0
-              const bankIcon = bank === 'Relay' ? '🏦' : bank === 'Revolut' ? '💳' : bank === 'Mercury' ? '🪙' : '🏛️'
               return (
                 <div 
                   key={bank} 
@@ -909,8 +937,8 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
                   onClick={() => setDetailPopup({ title: `${bank} Income`, transactions: data.transactions })}
                 >
                   <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-zinc-700/50 flex items-center justify-center text-lg">
-                      {bankIcon}
+                    <div className="w-8 h-8 rounded-lg bg-zinc-700/50 flex items-center justify-center text-zinc-400">
+                      <BankIcon bank={bank} className="w-4 h-4" />
                     </div>
                     <div className="flex-1">
                       <div className="flex items-center justify-between mb-1">
@@ -2560,6 +2588,7 @@ function UploadModal({ onClose, onUploadComplete, teamMembers }: { onClose: () =
   const [isDragging, setIsDragging] = useState(false)
   const [files, setFiles] = useState<File[]>([])
   const [processing, setProcessing] = useState(false)
+  const [importing, setImporting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [analysisResult, setAnalysisResult] = useState<{ transactions: Transaction[]; summary: any } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -2690,8 +2719,12 @@ function UploadModal({ onClose, onUploadComplete, teamMembers }: { onClose: () =
 
   const confirmImport = () => {
     if (analysisResult) {
+      setImporting(true)
       const period = `${monthNamesShort[selectedMonth]} ${selectedYear}`
-      onUploadComplete(analysisResult.transactions, period, files)
+      // Small delay to show loading state before heavy operation
+      setTimeout(() => {
+        onUploadComplete(analysisResult.transactions, period, files)
+      }, 100)
     }
   }
 
@@ -2790,7 +2823,7 @@ function UploadModal({ onClose, onUploadComplete, teamMembers }: { onClose: () =
               {/* Success header */}
               <div className="flex items-center gap-2 text-emerald-400">
                 <div className="w-6 h-6 rounded-full bg-emerald-500 flex items-center justify-center">
-                  <span className="text-black text-sm font-bold">✓</span>
+                  <Check className="w-4 h-4 text-black" strokeWidth={3} />
                 </div>
                 <span className="font-semibold">Ready to Import</span>
                 <span className="text-zinc-500 text-sm ml-auto">{files.length} file{files.length > 1 ? 's' : ''}</span>
@@ -2846,12 +2879,22 @@ function UploadModal({ onClose, onUploadComplete, teamMembers }: { onClose: () =
             </div>
           )}
 
+          {/* Importing Overlay */}
+          {importing && (
+            <div className="absolute inset-0 bg-zinc-900/95 flex flex-col items-center justify-center rounded-2xl">
+              <Loader2 className="w-10 h-10 text-emerald-500 animate-spin mb-4" />
+              <p className="text-lg font-semibold">Importing transactions...</p>
+              <p className="text-zinc-500 text-sm mt-1">This may take a moment</p>
+            </div>
+          )}
+
           {/* Action Buttons */}
-          {analysisResult && (
+          {analysisResult && !importing && (
             <div className="pt-2">
               <button
                 onClick={confirmImport}
-                className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold rounded-xl transition-colors"
+                disabled={importing}
+                className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 Import {analysisResult.transactions.length} Transactions
               </button>
