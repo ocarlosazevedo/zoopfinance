@@ -1774,17 +1774,50 @@ export default function Dashboard() {
         balance: tx.balance || null
       }))
 
-      // Use upsert to handle duplicate IDs (re-imports)
-      const { error: txError } = await supabase
-        .from('transactions')
-        .upsert(txToInsert as any, { onConflict: 'id' })
+      console.log('=== SAVE DEBUG ===')
+      console.log('Period:', period)
+      console.log('Transactions to save:', txToInsert.length)
+      console.log('Unique IDs:', new Set(txToInsert.map(t => t.id)).size)
+      console.log('Sample IDs:', txToInsert.slice(0, 3).map(t => t.id))
 
-      if (txError) {
-        console.error('Error saving transactions:', txError)
-        throw txError
+      // Delete existing transactions for this period first (to avoid conflicts)
+      console.log('Deleting existing transactions for period:', period)
+      const { error: deleteError } = await supabase
+        .from('transactions')
+        .delete()
+        .eq('period', period)
+      
+      console.log('Delete error:', deleteError)
+      
+      if (deleteError) {
+        console.error('Error deleting existing transactions:', deleteError)
+        // Continue anyway - might be first import
       }
 
-      // Record the statement
+      // Insert in batches of 100 to avoid payload limits
+      const batchSize = 100
+      console.log('Inserting in batches of', batchSize)
+      for (let i = 0; i < txToInsert.length; i += batchSize) {
+        const batch = txToInsert.slice(i, i + batchSize)
+        console.log(`Inserting batch ${i / batchSize + 1}/${Math.ceil(txToInsert.length / batchSize)} (${batch.length} items)`)
+        const { error: txError } = await supabase
+          .from('transactions')
+          .insert(batch as any)
+
+        if (txError) {
+          console.error(`Error saving batch ${i / batchSize + 1}:`, txError)
+          console.error('First item in failed batch:', JSON.stringify(batch[0], null, 2))
+          throw txError
+        }
+      }
+      console.log('All batches saved successfully!')
+
+      // Record the statement (delete existing first)
+      await supabase
+        .from('statements')
+        .delete()
+        .eq('filename', filename)
+      
       const { error: stmtError } = await supabase
         .from('statements')
         .insert({
