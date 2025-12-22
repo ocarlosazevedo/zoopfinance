@@ -1237,9 +1237,27 @@ function EditVariableModal({ member, month, currentValue, currentNote, onSave, o
 // MAIN DASHBOARD
 // ============================================
 export default function Dashboard() {
-  const [activeTab, setActiveTab] = useState<'overview' | 'transactions' | 'payroll'>('overview')
-  const [selectedYear, setSelectedYear] = useState(currentYear)
-  const [selectedMonths, setSelectedMonths] = useState<number[]>([currentMonthIndex])
+  const [activeTab, setActiveTab] = useState<'overview' | 'transactions' | 'payroll'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('zoop-active-tab')
+      if (saved === 'overview' || saved === 'transactions' || saved === 'payroll') return saved
+    }
+    return 'overview'
+  })
+  const [selectedYear, setSelectedYear] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('zoop-selected-year')
+      return saved ? parseInt(saved) : currentYear
+    }
+    return currentYear
+  })
+  const [selectedMonths, setSelectedMonths] = useState<number[]>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('zoop-selected-months')
+      return saved ? JSON.parse(saved) : [currentMonthIndex]
+    }
+    return [currentMonthIndex]
+  })
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [statements, setStatements] = useState<{ id: string; filename: string; bank: string; period: string; transactions_count: number; created_at: string }[]>([])
@@ -1254,6 +1272,19 @@ export default function Dashboard() {
   // Month names
   const monthNamesShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
   const currentMonthStr = `${monthNamesShort[currentMonthIndex]} ${currentYear}`
+
+  // Persist selected period to localStorage
+  useEffect(() => {
+    localStorage.setItem('zoop-active-tab', activeTab)
+  }, [activeTab])
+
+  useEffect(() => {
+    localStorage.setItem('zoop-selected-year', selectedYear.toString())
+  }, [selectedYear])
+
+  useEffect(() => {
+    localStorage.setItem('zoop-selected-months', JSON.stringify(selectedMonths))
+  }, [selectedMonths])
 
   // Load data from Supabase on mount
   useEffect(() => {
