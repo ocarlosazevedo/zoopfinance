@@ -217,6 +217,199 @@ function PeriodSelector({
 }
 
 // ============================================
+// DATE PICKER COMPONENT
+// ============================================
+function DatePicker({ 
+  value, 
+  onChange, 
+  placeholder = 'Select date',
+  label
+}: { 
+  value: string
+  onChange: (date: string) => void
+  placeholder?: string
+  label?: string
+}) {
+  const [isOpen, setIsOpen] = useState(false)
+  const [viewDate, setViewDate] = useState(() => {
+    if (value) return new Date(value)
+    return new Date()
+  })
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  const daysOfWeek = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
+  const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+
+  // Get days in month
+  const getDaysInMonth = (date: Date) => {
+    const year = date.getFullYear()
+    const month = date.getMonth()
+    const firstDay = new Date(year, month, 1).getDay()
+    const daysInMonth = new Date(year, month + 1, 0).getDate()
+    const daysInPrevMonth = new Date(year, month, 0).getDate()
+    
+    const days: { date: Date; isCurrentMonth: boolean }[] = []
+    
+    // Previous month days
+    for (let i = firstDay - 1; i >= 0; i--) {
+      days.push({
+        date: new Date(year, month - 1, daysInPrevMonth - i),
+        isCurrentMonth: false
+      })
+    }
+    
+    // Current month days
+    for (let i = 1; i <= daysInMonth; i++) {
+      days.push({
+        date: new Date(year, month, i),
+        isCurrentMonth: true
+      })
+    }
+    
+    // Next month days to fill grid
+    const remaining = 42 - days.length
+    for (let i = 1; i <= remaining; i++) {
+      days.push({
+        date: new Date(year, month + 1, i),
+        isCurrentMonth: false
+      })
+    }
+    
+    return days
+  }
+
+  const days = getDaysInMonth(viewDate)
+
+  const formatDisplayDate = (dateStr: string) => {
+    if (!dateStr) return ''
+    const date = new Date(dateStr)
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  }
+
+  const isSelected = (date: Date) => {
+    if (!value) return false
+    const selected = new Date(value)
+    return date.getDate() === selected.getDate() && 
+           date.getMonth() === selected.getMonth() && 
+           date.getFullYear() === selected.getFullYear()
+  }
+
+  const isToday = (date: Date) => {
+    const today = new Date()
+    return date.getDate() === today.getDate() && 
+           date.getMonth() === today.getMonth() && 
+           date.getFullYear() === today.getFullYear()
+  }
+
+  const handleSelect = (date: Date) => {
+    const formatted = date.toISOString().split('T')[0]
+    onChange(formatted)
+    setIsOpen(false)
+  }
+
+  const prevMonth = () => {
+    setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() - 1, 1))
+  }
+
+  const nextMonth = () => {
+    setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 1))
+  }
+
+  const clearDate = () => {
+    onChange('')
+    setIsOpen(false)
+  }
+
+  return (
+    <div className="relative" ref={containerRef}>
+      {label && <label className="block text-zinc-500 text-xs mb-1">{label}</label>}
+      <button
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full flex items-center justify-between bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-2.5 focus:outline-none focus:border-zinc-600 hover:border-zinc-600 transition-colors text-left"
+      >
+        <span className={value ? 'text-white' : 'text-zinc-500'}>
+          {value ? formatDisplayDate(value) : placeholder}
+        </span>
+        <Calendar className="w-4 h-4 text-zinc-500" />
+      </button>
+
+      {isOpen && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
+          <div className="absolute top-full left-0 mt-2 w-72 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl z-50 overflow-hidden">
+            {/* Header */}
+            <div className="p-3 border-b border-zinc-800 flex items-center justify-between">
+              <button 
+                onClick={prevMonth}
+                className="p-1.5 hover:bg-zinc-800 rounded-lg transition-colors"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <span className="font-medium">
+                {months[viewDate.getMonth()]} {viewDate.getFullYear()}
+              </span>
+              <button 
+                onClick={nextMonth}
+                className="p-1.5 hover:bg-zinc-800 rounded-lg transition-colors"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Days of week */}
+            <div className="grid grid-cols-7 gap-1 p-2 border-b border-zinc-800">
+              {daysOfWeek.map(day => (
+                <div key={day} className="text-center text-xs text-zinc-500 py-1">
+                  {day}
+                </div>
+              ))}
+            </div>
+
+            {/* Calendar grid */}
+            <div className="grid grid-cols-7 gap-1 p-2">
+              {days.map((day, i) => (
+                <button
+                  key={i}
+                  onClick={() => handleSelect(day.date)}
+                  className={`
+                    p-2 text-sm rounded-lg transition-colors
+                    ${!day.isCurrentMonth ? 'text-zinc-600' : 'text-zinc-300'}
+                    ${isSelected(day.date) ? 'bg-emerald-500 text-black font-semibold' : ''}
+                    ${isToday(day.date) && !isSelected(day.date) ? 'border border-emerald-500/50 text-emerald-400' : ''}
+                    ${day.isCurrentMonth && !isSelected(day.date) ? 'hover:bg-zinc-800' : ''}
+                  `}
+                >
+                  {day.date.getDate()}
+                </button>
+              ))}
+            </div>
+
+            {/* Footer */}
+            <div className="p-2 border-t border-zinc-800 flex gap-2">
+              <button
+                onClick={clearDate}
+                className="flex-1 py-2 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-lg text-sm transition-colors"
+              >
+                Clear
+              </button>
+              <button
+                onClick={() => {
+                  handleSelect(new Date())
+                }}
+                className="flex-1 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-sm transition-colors"
+              >
+                Today
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ============================================
 // EMPTY STATE COMPONENT
 // ============================================
 function EmptyState({ icon: Icon, title, description, action, actionLabel }: { icon: React.ElementType; title: string; description: string; action?: () => void; actionLabel?: string }) {
@@ -532,28 +725,26 @@ function TransactionsTab({ transactions, onUpload }: { transactions: Transaction
           </select>
         </div>
         <div className="flex flex-col sm:flex-row gap-4 items-end">
-          <div className="flex-1">
-            <label className="block text-zinc-500 text-xs mb-1">From</label>
-            <input
-              type="date"
+          <div className="flex-1 min-w-[160px]">
+            <DatePicker
               value={filterDateFrom}
-              onChange={(e) => setFilterDateFrom(e.target.value)}
-              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-2 focus:outline-none focus:border-zinc-600"
+              onChange={setFilterDateFrom}
+              placeholder="From date"
+              label="From"
             />
           </div>
-          <div className="flex-1">
-            <label className="block text-zinc-500 text-xs mb-1">To</label>
-            <input
-              type="date"
+          <div className="flex-1 min-w-[160px]">
+            <DatePicker
               value={filterDateTo}
-              onChange={(e) => setFilterDateTo(e.target.value)}
-              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-2 focus:outline-none focus:border-zinc-600"
+              onChange={setFilterDateTo}
+              placeholder="To date"
+              label="To"
             />
           </div>
           {hasActiveFilters && (
             <button
               onClick={clearFilters}
-              className="px-4 py-2 text-zinc-400 hover:text-white hover:bg-zinc-700 rounded-lg transition-colors text-sm"
+              className="px-4 py-2.5 text-zinc-400 hover:text-white hover:bg-zinc-700 rounded-lg transition-colors text-sm whitespace-nowrap"
             >
               Clear Filters
             </button>
