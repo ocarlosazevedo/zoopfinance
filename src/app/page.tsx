@@ -471,14 +471,9 @@ function LoadingSkeleton() {
 // OVERVIEW TAB
 // ============================================
 function OverviewTab({ data, transactions, onUpload, loading }: { data: { income: number; expenses: number; profit: number }; transactions: Transaction[]; onUpload: () => void; loading: boolean }) {
-  // DEBUG: Log received transactions
-  const expenseTransactions = transactions.filter(t => t.type === 'expense')
-  const expenseSum = expenseTransactions.reduce((s, t) => s + Math.abs(t.amount), 0)
-  console.log('=== OVERVIEW TAB DEBUG ===')
-  console.log('Total transactions received:', transactions.length)
-  console.log('Expense transactions:', expenseTransactions.length)
-  console.log('Expense sum (calculated):', expenseSum.toFixed(2))
-  console.log('Expense sum (from data prop):', data.expenses.toFixed(2))
+  // State for transaction detail popup
+  const [detailPopup, setDetailPopup] = useState<{ title: string; transactions: Transaction[] } | null>(null)
+  
   const margin = data.income > 0 ? ((data.profit / data.income) * 100).toFixed(1) : '0'
   const hasData = data.income > 0 || data.expenses > 0
 
@@ -506,12 +501,14 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
     .filter(t => t.type === 'expense')
     .reduce((acc, t) => {
       const cat = t.category || 'Other'
-      acc[cat] = (acc[cat] || 0) + Math.abs(t.amount)
+      if (!acc[cat]) acc[cat] = { total: 0, transactions: [] }
+      acc[cat].total += Math.abs(t.amount)
+      acc[cat].transactions.push(t)
       return acc
-    }, {} as Record<string, number>)
+    }, {} as Record<string, { total: number; transactions: Transaction[] }>)
 
-  const totalExpenses = Object.values(expensesByCategory).reduce((a, b) => a + b, 0)
-  const expensesCategorySorted = Object.entries(expensesByCategory).sort((a, b) => b[1] - a[1])
+  const totalExpenses = Object.values(expensesByCategory).reduce((a, b) => a + b.total, 0)
+  const expensesCategorySorted = Object.entries(expensesByCategory).sort((a, b) => b[1].total - a[1].total)
 
   // Income by source (using description/payee patterns)
   const incomeBySource = transactions
@@ -528,12 +525,28 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
       else if (t.payee) source = t.payee
       else source = t.bank
       
-      acc[source] = (acc[source] || 0) + t.amount
+      if (!acc[source]) acc[source] = { total: 0, transactions: [] }
+      acc[source].total += t.amount
+      acc[source].transactions.push(t)
       return acc
-    }, {} as Record<string, number>)
+    }, {} as Record<string, { total: number; transactions: Transaction[] }>)
 
-  const totalIncome = Object.values(incomeBySource).reduce((a, b) => a + b, 0)
-  const incomeSourceSorted = Object.entries(incomeBySource).sort((a, b) => b[1] - a[1])
+  const totalIncome = Object.values(incomeBySource).reduce((a, b) => a + b.total, 0)
+  const incomeSourceSorted = Object.entries(incomeBySource).sort((a, b) => b[1].total - a[1].total)
+
+  // Income by Bank
+  const incomeByBank = transactions
+    .filter(t => t.type === 'income')
+    .reduce((acc, t) => {
+      const bank = t.bank || 'Unknown'
+      if (!acc[bank]) acc[bank] = { total: 0, transactions: [] }
+      acc[bank].total += t.amount
+      acc[bank].transactions.push(t)
+      return acc
+    }, {} as Record<string, { total: number; transactions: Transaction[] }>)
+
+  const incomeBankSorted = Object.entries(incomeByBank).sort((a, b) => b[1].total - a[1].total)
+  const totalIncomeByBank = Object.values(incomeByBank).reduce((a, b) => a + b.total, 0)
 
   // Normalize vendor names for grouping
   const normalizeVendor = (name: string): string => {
@@ -667,12 +680,46 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
 
   return (
     <div className="space-y-6">
+      {/* Transaction Detail Popup */}
+      {detailPopup && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setDetailPopup(null)}>
+          <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-2xl max-h-[80vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="p-5 border-b border-zinc-800 flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold">{detailPopup.title}</h3>
+                <p className="text-zinc-500 text-sm">{detailPopup.transactions.length} transactions</p>
+              </div>
+              <button onClick={() => setDetailPopup(null)} className="p-2 hover:bg-zinc-800 rounded-lg">
+                <X className="w-5 h-5 text-zinc-400" />
+              </button>
+            </div>
+            <div className="p-5 overflow-y-auto max-h-[60vh]">
+              <div className="space-y-2">
+                {detailPopup.transactions.map((tx, i) => (
+                  <div key={i} className="flex items-center justify-between p-3 bg-zinc-800/50 rounded-lg hover:bg-zinc-800 transition-colors">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium truncate">{tx.description}</p>
+                      <p className="text-zinc-500 text-sm">{tx.date} • {tx.bank}</p>
+                    </div>
+                    <span className={`font-semibold ml-4 ${tx.type === 'income' ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {tx.type === 'income' ? '+' : '-'}{formatCurrency(Math.abs(tx.amount))}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Metrics */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="col-span-2 bg-gradient-to-br from-emerald-500/20 to-emerald-600/5 border border-emerald-500/30 rounded-2xl p-6">
-          <p className="text-emerald-400/80 text-sm font-medium mb-1">Total Profit</p>
-          <p className="text-4xl font-bold">{formatCurrency(data.profit)}</p>
-          <p className="text-emerald-400 text-sm mt-2">{margin}% margin</p>
+        <div className={`col-span-2 bg-gradient-to-br ${data.profit >= 0 ? 'from-emerald-500/20 to-emerald-600/5 border-emerald-500/30' : 'from-red-500/20 to-red-600/5 border-red-500/30'} border rounded-2xl p-6`}>
+          <p className={`${data.profit >= 0 ? 'text-emerald-400/80' : 'text-red-400/80'} text-sm font-medium mb-1`}>Total Profit</p>
+          <p className={`text-4xl font-bold ${data.profit >= 0 ? '' : 'text-red-400'}`}>
+            {data.profit < 0 ? '-' : ''}{formatCurrency(Math.abs(data.profit))}
+          </p>
+          <p className={`${data.profit >= 0 ? 'text-emerald-400' : 'text-red-400'} text-sm mt-2`}>{margin}% margin</p>
         </div>
         <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl p-5">
           <p className="text-zinc-400 text-sm mb-2">Income</p>
@@ -696,15 +743,19 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
             <span className="text-zinc-500 text-sm">{formatCurrency(totalExpenses)}</span>
           </div>
           <div className="space-y-4">
-            {expensesCategorySorted.slice(0, 6).map(([category, amount]) => {
-              const percentage = totalExpenses > 0 ? (amount / totalExpenses) * 100 : 0
+            {expensesCategorySorted.slice(0, 6).map(([category, data]) => {
+              const percentage = totalExpenses > 0 ? (data.total / totalExpenses) * 100 : 0
               return (
-                <div key={category} className="space-y-2">
+                <div 
+                  key={category} 
+                  className="space-y-2 cursor-pointer hover:bg-zinc-700/30 -mx-2 px-2 py-1 rounded-lg transition-colors"
+                  onClick={() => setDetailPopup({ title: `${category} Expenses`, transactions: data.transactions })}
+                >
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-zinc-300">{category}</span>
                     <div className="flex items-center gap-3">
                       <span className="text-zinc-500">{percentage.toFixed(0)}%</span>
-                      <span className="font-medium w-24 text-right">{formatCurrency(amount)}</span>
+                      <span className="font-medium w-24 text-right">{formatCurrency(data.total)}</span>
                     </div>
                   </div>
                   <div className="h-2 bg-zinc-700/50 rounded-full overflow-hidden">
@@ -729,15 +780,19 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
             <span className="text-zinc-500 text-sm">{formatCurrency(totalIncome)}</span>
           </div>
           <div className="space-y-4">
-            {incomeSourceSorted.slice(0, 6).map(([source, amount]) => {
-              const percentage = totalIncome > 0 ? (amount / totalIncome) * 100 : 0
+            {incomeSourceSorted.slice(0, 6).map(([source, data]) => {
+              const percentage = totalIncome > 0 ? (data.total / totalIncome) * 100 : 0
               return (
-                <div key={source} className="space-y-2">
+                <div 
+                  key={source} 
+                  className="space-y-2 cursor-pointer hover:bg-zinc-700/30 -mx-2 px-2 py-1 rounded-lg transition-colors"
+                  onClick={() => setDetailPopup({ title: `${source} Income`, transactions: data.transactions })}
+                >
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-zinc-300">{source}</span>
                     <div className="flex items-center gap-3">
                       <span className="text-zinc-500">{percentage.toFixed(0)}%</span>
-                      <span className="font-medium text-emerald-400 w-24 text-right">{formatCurrency(amount)}</span>
+                      <span className="font-medium text-emerald-400 w-24 text-right">{formatCurrency(data.total)}</span>
                     </div>
                   </div>
                   <div className="h-2 bg-zinc-700/50 rounded-full overflow-hidden">
@@ -835,6 +890,52 @@ function OverviewTab({ data, transactions, onUpload, loading }: { data: { income
               <span className="text-zinc-500 text-sm">{currencySorted.reduce((a, b) => a + b.count, 0)} transactions</span>
             </div>
           )}
+        </div>
+
+        {/* Income by Bank */}
+        <div className="bg-zinc-800/50 border border-zinc-700 rounded-2xl p-6">
+          <div className="flex items-center justify-between mb-5">
+            <h3 className="font-semibold">Income by Bank</h3>
+            <span className="text-zinc-500 text-sm">{formatCurrency(totalIncomeByBank)}</span>
+          </div>
+          <div className="space-y-4">
+            {incomeBankSorted.map(([bank, data]) => {
+              const percentage = totalIncomeByBank > 0 ? (data.total / totalIncomeByBank) * 100 : 0
+              const bankIcon = bank === 'Relay' ? '🏦' : bank === 'Revolut' ? '💳' : bank === 'Mercury' ? '🪙' : '🏛️'
+              return (
+                <div 
+                  key={bank} 
+                  className="space-y-2 cursor-pointer hover:bg-zinc-700/30 -mx-2 px-2 py-1 rounded-lg transition-colors"
+                  onClick={() => setDetailPopup({ title: `${bank} Income`, transactions: data.transactions })}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-zinc-700/50 flex items-center justify-center text-lg">
+                      {bankIcon}
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-medium">{bank}</span>
+                        <span className="text-zinc-500 text-sm">{percentage.toFixed(0)}%</span>
+                      </div>
+                      <div className="h-1.5 bg-zinc-700/50 rounded-full overflow-hidden">
+                        <div 
+                          className="h-full bg-gradient-to-r from-blue-500 to-blue-400 rounded-full transition-all duration-500"
+                          style={{ width: `${percentage}%` }}
+                        />
+                      </div>
+                    </div>
+                    <div className="text-right w-24">
+                      <p className="font-semibold text-emerald-400">{formatCurrency(data.total)}</p>
+                      <p className="text-zinc-500 text-xs">{data.transactions.length} tx</p>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+            {incomeBankSorted.length === 0 && (
+              <p className="text-zinc-500 text-sm text-center py-4">No income data</p>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -1016,27 +1117,33 @@ function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths,
           className="flex-1 min-w-[200px] bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 focus:outline-none focus:border-zinc-600 text-sm"
         />
         
-        <select
-          value={filterType}
-          onChange={(e) => setFilterType(e.target.value)}
-          className="bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 focus:outline-none cursor-pointer text-sm"
-        >
-          <option value="all">All Types</option>
-          <option value="income">Income</option>
-          <option value="expense">Expenses</option>
-          <option value="internal">Internal</option>
-        </select>
+        <div className="relative">
+          <select
+            value={filterType}
+            onChange={(e) => setFilterType(e.target.value)}
+            className="bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 pr-10 focus:outline-none cursor-pointer text-sm appearance-none"
+          >
+            <option value="all">All Types</option>
+            <option value="income">Income</option>
+            <option value="expense">Expenses</option>
+            <option value="internal">Internal</option>
+          </select>
+          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
+        </div>
         
-        <select
-          value={filterCategory}
-          onChange={(e) => setFilterCategory(e.target.value)}
-          className="bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 focus:outline-none cursor-pointer text-sm"
-        >
-          <option value="all">All Categories</option>
-          {categories.map(cat => (
-            <option key={cat} value={cat}>{cat}</option>
-          ))}
-        </select>
+        <div className="relative">
+          <select
+            value={filterCategory}
+            onChange={(e) => setFilterCategory(e.target.value)}
+            className="bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 pr-10 focus:outline-none cursor-pointer text-sm appearance-none"
+          >
+            <option value="all">All Categories</option>
+            {categories.map(cat => (
+              <option key={cat} value={cat}>{cat}</option>
+            ))}
+          </select>
+          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
+        </div>
 
         {/* Date Filter Dropdown */}
         <div className="relative">
@@ -1692,14 +1799,6 @@ export default function Dashboard() {
           balance: tx.balance ? parseFloat(tx.balance) : undefined
         }))
         
-        // DEBUG LOGS
-        const expenses = mapped.filter(t => t.type === 'expense')
-        const expenseSum = expenses.reduce((s, t) => s + Math.abs(t.amount), 0)
-        console.log('=== LOAD DEBUG ===')
-        console.log('Expense transactions loaded:', expenses.length)
-        console.log('Expense sum:', expenseSum.toFixed(2))
-        console.log('Unique expense IDs:', new Set(expenses.map(t => t.id)).size)
-        
         setTransactions(mapped)
       }
 
@@ -1774,21 +1873,12 @@ export default function Dashboard() {
         balance: tx.balance || null
       }))
 
-      console.log('=== SAVE DEBUG ===')
-      console.log('Period:', period)
-      console.log('Bank:', bank)
-      console.log('Transactions to save:', txToInsert.length)
-      console.log('Unique IDs:', new Set(txToInsert.map(t => t.id)).size)
-
       // Delete existing transactions for this period AND bank only (to allow multiple banks)
-      console.log('Deleting existing transactions for period:', period, 'bank:', bank)
       const { error: deleteError } = await supabase
         .from('transactions')
         .delete()
         .eq('period', period)
         .eq('bank', bank)
-      
-      console.log('Delete error:', deleteError)
       
       if (deleteError) {
         console.error('Error deleting existing transactions:', deleteError)
@@ -1797,21 +1887,17 @@ export default function Dashboard() {
 
       // Insert in batches of 100 to avoid payload limits
       const batchSize = 100
-      console.log('Inserting in batches of', batchSize)
       for (let i = 0; i < txToInsert.length; i += batchSize) {
         const batch = txToInsert.slice(i, i + batchSize)
-        console.log(`Inserting batch ${i / batchSize + 1}/${Math.ceil(txToInsert.length / batchSize)} (${batch.length} items)`)
         const { error: txError } = await supabase
           .from('transactions')
           .insert(batch as any)
 
         if (txError) {
           console.error(`Error saving batch ${i / batchSize + 1}:`, txError)
-          console.error('First item in failed batch:', JSON.stringify(batch[0], null, 2))
           throw txError
         }
       }
-      console.log('All batches saved successfully!')
 
       // Record the statement (delete existing first)
       await supabase
@@ -1896,14 +1982,6 @@ export default function Dashboard() {
       return tx.period === periodStr
     })
   })
-
-  // DEBUG: Log filtering
-  console.log('=== FILTER DEBUG ===')
-  console.log('Selected year:', selectedYear)
-  console.log('Selected months:', selectedMonths)
-  console.log('Total before filter:', transactions.length)
-  console.log('Total after filter:', filteredTransactions.length)
-  console.log('Unique periods in transactions:', [...new Set(transactions.map(t => t.period))])
 
   // Calculate aggregated data from FILTERED transactions
   const aggregatedData = filteredTransactions.reduce((acc, t) => {
@@ -2589,29 +2667,15 @@ function UploadModal({ onClose, onUploadComplete, teamMembers }: { onClose: () =
       const income = incomeTransactions.reduce((s, t) => s + t.amount, 0)
       const expenses = expenseTransactions.reduce((s, t) => s + Math.abs(t.amount), 0)
       
-      // DEBUG LOGS
-      console.log('=== PARSE DEBUG ===')
-      console.log('Total transactions:', allTransactions.length)
-      console.log('Income transactions:', incomeTransactions.length, '- Total:', income.toFixed(2))
-      console.log('Expense transactions:', expenseTransactions.length, '- Total:', expenses.toFixed(2))
-      console.log('Internal transactions:', internalTransactions.length)
-      console.log('Unique IDs:', new Set(allTransactions.map(t => t.id)).size)
-      
-      // Log sample expenses
-      console.log('Sample expenses (first 5):')
-      expenseTransactions.slice(0, 5).forEach(t => {
-        console.log(`  ${t.id} | ${t.amount} | ${t.description}`)
-      })
-      
       setAnalysisResult({
         transactions: allTransactions,
         summary: {
           total: allTransactions.length,
           income,
           expenses,
-          incomeCount: allTransactions.filter(t => t.type === 'income').length,
-          expenseCount: allTransactions.filter(t => t.type === 'expense').length,
-          internalCount: allTransactions.filter(t => t.type === 'internal').length,
+          incomeCount: incomeTransactions.length,
+          expenseCount: expenseTransactions.length,
+          internalCount: internalTransactions.length,
           categories: [...new Set(allTransactions.map(t => t.category).filter(Boolean))]
         }
       })
@@ -2646,7 +2710,7 @@ function UploadModal({ onClose, onUploadComplete, teamMembers }: { onClose: () =
             <h3 className="text-lg font-semibold">Upload Statements</h3>
             <p className="text-zinc-500 text-sm flex items-center gap-1.5">
               <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              Instant Processing
+              Zoop AI Analysis
             </p>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-zinc-800 rounded-lg"><X className="w-5 h-5 text-zinc-400" /></button>
@@ -2657,24 +2721,30 @@ function UploadModal({ onClose, onUploadComplete, teamMembers }: { onClose: () =
           <div>
             <label className="block text-zinc-400 text-sm mb-2">Statement Period</label>
             <div className="flex gap-2">
-              <select
-                value={selectedMonth}
-                onChange={(e) => { setSelectedMonth(parseInt(e.target.value)); setAnalysisResult(null); setFiles([]) }}
-                className="flex-1 bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 focus:outline-none focus:border-emerald-500 cursor-pointer"
-              >
-                {monthNames.map((month, idx) => (
-                  <option key={month} value={idx}>{month}</option>
-                ))}
-              </select>
-              <select
-                value={selectedYear}
-                onChange={(e) => { setSelectedYear(parseInt(e.target.value)); setAnalysisResult(null); setFiles([]) }}
-                className="w-24 bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 focus:outline-none focus:border-emerald-500 cursor-pointer"
-              >
-                {[2023, 2024, 2025, 2026].map((year) => (
-                  <option key={year} value={year}>{year}</option>
-                ))}
-              </select>
+              <div className="relative flex-1">
+                <select
+                  value={selectedMonth}
+                  onChange={(e) => { setSelectedMonth(parseInt(e.target.value)); setAnalysisResult(null); setFiles([]) }}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 pr-10 focus:outline-none focus:border-emerald-500 cursor-pointer appearance-none"
+                >
+                  {monthNames.map((month, idx) => (
+                    <option key={month} value={idx}>{month}</option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
+              </div>
+              <div className="relative w-28">
+                <select
+                  value={selectedYear}
+                  onChange={(e) => { setSelectedYear(parseInt(e.target.value)); setAnalysisResult(null); setFiles([]) }}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 pr-10 focus:outline-none focus:border-emerald-500 cursor-pointer appearance-none"
+                >
+                  {[2023, 2024, 2025, 2026].map((year) => (
+                    <option key={year} value={year}>{year}</option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
+              </div>
             </div>
           </div>
 
@@ -2766,30 +2836,6 @@ function UploadModal({ onClose, onUploadComplete, teamMembers }: { onClose: () =
                   </div>
                 </div>
               )}
-
-              {/* Preview */}
-              <div>
-                <p className="text-zinc-500 text-xs mb-2">Preview:</p>
-                <div className="space-y-1.5 max-h-36 overflow-y-auto">
-                  {analysisResult.transactions.slice(0, 4).map((tx, i) => (
-                    <div key={i} className="flex items-center justify-between p-2.5 bg-zinc-800/50 rounded-lg">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm truncate">{tx.description}</p>
-                        <p className="text-zinc-600 text-xs">{tx.category} • {tx.bank}</p>
-                      </div>
-                      <span className={`text-sm font-semibold ml-3 ${tx.type === 'income' ? 'text-emerald-400' : tx.type === 'expense' ? 'text-red-400' : 'text-blue-400'}`}>
-                        {tx.type === 'income' ? '+' : tx.type === 'expense' ? '-' : '↔'}
-                        {formatCurrency(Math.abs(tx.amount), tx.currency)}
-                      </span>
-                    </div>
-                  ))}
-                  {analysisResult.transactions.length > 4 && (
-                    <p className="text-zinc-600 text-xs text-center py-1">
-                      +{analysisResult.transactions.length - 4} more transactions
-                    </p>
-                  )}
-                </div>
-              </div>
             </div>
           )}
 
@@ -2802,16 +2848,10 @@ function UploadModal({ onClose, onUploadComplete, teamMembers }: { onClose: () =
 
           {/* Action Buttons */}
           {analysisResult && (
-            <div className="flex gap-3 pt-2">
-              <button
-                onClick={() => { setAnalysisResult(null); setFiles([]) }}
-                className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-medium transition-colors"
-              >
-                Add More Files
-              </button>
+            <div className="pt-2">
               <button
                 onClick={confirmImport}
-                className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold rounded-xl transition-colors"
+                className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold rounded-xl transition-colors"
               >
                 Import {analysisResult.transactions.length} Transactions
               </button>
