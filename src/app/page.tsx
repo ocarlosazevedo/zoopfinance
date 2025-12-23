@@ -4137,15 +4137,30 @@ export default function Dashboard() {
     return updatedCount
   }
 
+  // Infer transaction type from category
+  const inferTypeFromCategory = (category: string): 'income' | 'expense' | 'internal' | null => {
+    if (category === 'Sales' || category === 'Refunds') return 'income'
+    if (category === 'Internal Transfer') return 'internal'
+    // All other categories are expenses (including custom categories)
+    return 'expense'
+  }
+
   // Bulk update transaction categories and optionally create a rule
   const handleBulkUpdateCategory = async (transactionIds: string[], category: string, createRule?: { keyword: string }) => {
     setSaving(true)
     try {
+      // Infer type from category
+      const inferredType = inferTypeFromCategory(category)
+      const updates: { category: string; type?: string } = { category }
+      if (inferredType) {
+        updates.type = inferredType
+      }
+
       // Update all selected transactions
       for (const txId of transactionIds) {
         await (supabase
           .from('transactions') as any)
-          .update({ category })
+          .update(updates)
           .eq('id', txId)
       }
 
@@ -4180,9 +4195,18 @@ export default function Dashboard() {
   // Update a single transaction
   const handleUpdateTransaction = async (id: string, updates: { category?: string; type?: 'income' | 'expense' | 'internal' }) => {
     try {
+      // Auto-infer type from category if category is being changed and type is not explicitly set
+      const finalUpdates = { ...updates }
+      if (updates.category && !updates.type) {
+        const inferredType = inferTypeFromCategory(updates.category)
+        if (inferredType) {
+          finalUpdates.type = inferredType
+        }
+      }
+
       const { error } = await (supabase
         .from('transactions') as any)
-        .update(updates)
+        .update(finalUpdates)
         .eq('id', id)
       
       if (error) {
@@ -4190,7 +4214,7 @@ export default function Dashboard() {
         return false
       }
       
-      setTransactions(prev => prev.map(tx => tx.id === id ? { ...tx, ...updates } as Transaction : tx))
+      setTransactions(prev => prev.map(tx => tx.id === id ? { ...tx, ...finalUpdates } as Transaction : tx))
       return true
     } catch (err) {
       console.error('Error updating transaction:', err)
@@ -4202,15 +4226,24 @@ export default function Dashboard() {
   const handleBulkUpdateTransactions = async (ids: string[], updates: { category?: string; type?: 'income' | 'expense' | 'internal' }) => {
     setSaving(true)
     try {
+      // Auto-infer type from category
+      const finalUpdates = { ...updates }
+      if (updates.category && !updates.type) {
+        const inferredType = inferTypeFromCategory(updates.category)
+        if (inferredType) {
+          finalUpdates.type = inferredType
+        }
+      }
+
       for (const id of ids) {
         await (supabase
           .from('transactions') as any)
-          .update(updates)
+          .update(finalUpdates)
           .eq('id', id)
       }
       
       setTransactions(prev => prev.map(tx => 
-        ids.includes(tx.id) ? { ...tx, ...updates } as Transaction : tx
+        ids.includes(tx.id) ? { ...tx, ...finalUpdates } as Transaction : tx
       ))
       
       return true
