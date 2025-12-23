@@ -1940,7 +1940,10 @@ function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths,
                       </span>
                     </td>
                     <td className={`p-4 text-right font-semibold whitespace-nowrap ${tx.type === 'income' ? 'text-emerald-400' : tx.type === 'expense' ? 'text-red-400' : 'text-blue-400'}`}>
-                      <div>{tx.amount > 0 ? '+' : ''}{formatCurrency(tx.amount)}</div>
+                      <div>
+                        {tx.type === 'income' ? '+' : tx.type === 'expense' ? '-' : ''}
+                        {formatCurrency(Math.abs(tx.amount))}
+                      </div>
                       {tx.originalCurrency && (
                         <div className="text-xs text-zinc-500 font-normal">
                           {new Intl.NumberFormat('en-US', { style: 'currency', currency: tx.originalCurrency, minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(Math.abs(tx.originalAmount || 0))}
@@ -1993,6 +1996,24 @@ function TransactionDetailModal({ transaction: tx, onClose, allCategories, onUpd
   const [editType, setEditType] = useState(tx.type)
   const [saving, setSaving] = useState(false)
 
+  // Determine allowed types based on amount sign
+  // Negative amount → can only be expense or internal (NOT income)
+  // Positive amount → can only be income or internal (NOT expense)
+  const isNegativeAmount = tx.amount < 0
+  const canBeIncome = !isNegativeAmount  // Only positive amounts can be income
+  const canBeExpense = isNegativeAmount  // Only negative amounts can be expense
+
+  // When type changes, auto-set category
+  const handleTypeChange = (newType: 'income' | 'expense' | 'internal') => {
+    setEditType(newType)
+    if (newType === 'income') {
+      setEditCategory('Sales')
+    } else if (newType === 'internal') {
+      setEditCategory('Internal Transfer')
+    }
+    // For expense, keep current category or default to Other
+  }
+
   const handleSave = async () => {
     if (!onUpdate) return
     setSaving(true)
@@ -2007,7 +2028,16 @@ function TransactionDetailModal({ transaction: tx, onClose, allCategories, onUpd
     setEditing(false)
   }
 
-  const categoryNames = allCategories?.map(c => c.name) || []
+  // Filter categories for expense only (exclude Sales and Internal Transfer)
+  const expenseCategories = allCategories?.filter(c => c.name !== 'Sales' && c.name !== 'Internal Transfer').map(c => c.name) || []
+
+  // Format amount with correct sign
+  const formatAmountWithSign = () => {
+    const absAmount = formatCurrency(Math.abs(tx.amount))
+    if (tx.type === 'income') return `+${absAmount}`
+    if (tx.type === 'expense') return `-${absAmount}`
+    return absAmount // internal - no sign
+  }
 
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
@@ -2026,7 +2056,7 @@ function TransactionDetailModal({ transaction: tx, onClose, allCategories, onUpd
           {/* Amount */}
           <div className="text-center py-4 bg-zinc-800/30 rounded-xl">
             <p className={`text-3xl font-bold ${tx.type === 'income' ? 'text-emerald-400' : tx.type === 'expense' ? 'text-red-400' : 'text-blue-400'}`}>
-              {tx.amount > 0 ? '+' : ''}{formatCurrency(tx.amount)}
+              {formatAmountWithSign()}
             </p>
             {tx.originalCurrency && (
               <p className="text-zinc-500 mt-1">
@@ -2061,31 +2091,46 @@ function TransactionDetailModal({ transaction: tx, onClose, allCategories, onUpd
                   <div className="relative">
                     <select
                       value={editType}
-                      onChange={(e) => setEditType(e.target.value as 'income' | 'expense' | 'internal')}
+                      onChange={(e) => handleTypeChange(e.target.value as 'income' | 'expense' | 'internal')}
                       className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 pr-8 focus:outline-none focus:border-emerald-500 appearance-none cursor-pointer"
                     >
-                      <option value="income">Income</option>
-                      <option value="expense">Expense</option>
+                      {canBeIncome && <option value="income">Income</option>}
+                      {canBeExpense && <option value="expense">Expense</option>}
                       <option value="internal">Internal</option>
                     </select>
                     <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
                   </div>
+                  <p className="text-zinc-600 text-xs mt-1">
+                    {isNegativeAmount 
+                      ? 'Negative amounts can only be Expense or Internal' 
+                      : 'Positive amounts can only be Income or Internal'}
+                  </p>
                 </div>
+                
+                {/* Category - only editable for expense */}
                 <div>
                   <label className="text-zinc-500 text-xs mb-1 block">Category</label>
-                  <div className="relative">
-                    <select
-                      value={editCategory}
-                      onChange={(e) => setEditCategory(e.target.value)}
-                      className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 pr-8 focus:outline-none focus:border-emerald-500 appearance-none cursor-pointer"
-                    >
-                      {categoryNames.map(cat => (
-                        <option key={cat} value={cat}>{cat}</option>
-                      ))}
-                    </select>
-                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
-                  </div>
+                  {editType === 'expense' ? (
+                    <div className="relative">
+                      <select
+                        value={editCategory}
+                        onChange={(e) => setEditCategory(e.target.value)}
+                        className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 pr-8 focus:outline-none focus:border-emerald-500 appearance-none cursor-pointer"
+                      >
+                        {expenseCategories.map(cat => (
+                          <option key={cat} value={cat}>{cat}</option>
+                        ))}
+                      </select>
+                      <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
+                    </div>
+                  ) : (
+                    <div className="w-full bg-zinc-800/50 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-400">
+                      {editType === 'income' ? 'Sales' : 'Internal Transfer'}
+                      <span className="text-zinc-600 text-xs ml-2">(fixed)</span>
+                    </div>
+                  )}
                 </div>
+                
                 <div className="flex gap-2">
                   <button
                     onClick={() => { setEditing(false); setEditCategory(tx.category); setEditType(tx.type) }}
