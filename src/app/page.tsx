@@ -1377,7 +1377,19 @@ function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths,
         if (txDay < filterDateFrom || txDay > filterDateTo) return false
       }
       
-      if (search && !t.description.toLowerCase().includes(search.toLowerCase())) return false
+      // Search filter - check description, payee, and amount
+      if (search) {
+        const searchLower = search.toLowerCase().trim()
+        const descMatch = t.description.toLowerCase().includes(searchLower)
+        const payeeMatch = t.payee?.toLowerCase().includes(searchLower) || false
+        
+        // Check if search matches amount (remove $ and , for comparison)
+        const cleanSearch = search.replace(/[$,\s]/g, '')
+        const amountStr = Math.abs(t.amount).toFixed(2)
+        const amountMatch = cleanSearch && amountStr.includes(cleanSearch)
+        
+        if (!descMatch && !payeeMatch && !amountMatch) return false
+      }
       return true
     })
     .sort((a, b) => {
@@ -1533,7 +1545,7 @@ function TransactionsTab({ transactions, onUpload, selectedYear, selectedMonths,
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-500" />
           <input
             type="text"
-            placeholder="Search transactions..."
+            placeholder="Search description, payee, or amount..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full bg-zinc-800/50 border border-zinc-700 rounded-xl pl-12 pr-4 py-3 focus:outline-none focus:border-zinc-600"
